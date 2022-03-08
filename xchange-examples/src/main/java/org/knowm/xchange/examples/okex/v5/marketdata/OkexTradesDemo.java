@@ -1,6 +1,7 @@
 package org.knowm.xchange.examples.okex.v5.marketdata;
 
 import java.io.IOException;
+
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeFactory;
 import org.knowm.xchange.ExchangeSpecification;
@@ -26,10 +27,23 @@ public class OkexTradesDemo {
     // Interested in the public market data feed (no authentication)
 
     MarketDataService marketDataService = okexExchange.getMarketDataService();
-    FuturesContract contract = new FuturesContract(CurrencyPair.BTC_USDT, "210924");
+    FuturesContract contract = new FuturesContract(CurrencyPair.BTC_USDT, "211231");
 
     // Get the latest trades data for BTC_UST Sept 24th Contact
     Trades trades = marketDataService.getTrades(contract);
+
+    System.out.println(trades);
+    System.out.println("Trades(0): " + trades.getTrades().get(0).toString());
+    System.out.println("Trades size: " + trades.getTrades().size());
+
+    // Get the latest trades data for BTC_UST Sept 24th Contact
+    trades = marketDataService.getTrades(CurrencyPair.BTC_USDT);
+
+    System.out.println(trades);
+    System.out.println("Trades(0): " + trades.getTrades().get(0).toString());
+    System.out.println("Trades size: " + trades.getTrades().size());
+
+    trades = marketDataService.getTrades(CurrencyPair.BTC_USDT, new Object[0]);
 
     System.out.println(trades);
     System.out.println("Trades(0): " + trades.getTrades().get(0).toString());

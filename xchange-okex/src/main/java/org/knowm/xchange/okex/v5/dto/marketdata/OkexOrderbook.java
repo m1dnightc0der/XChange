@@ -1,21 +1,23 @@
 package org.knowm.xchange.okex.v5.dto.marketdata;
 
+import java.util.Date;
+import java.util.List;
+
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import java.util.List;
 
 public class OkexOrderbook {
 
   private final List<OkexPublicOrder> asks;
 
   private final List<OkexPublicOrder> bids;
-  private final String ts;
+  private final Date ts;
 
   @JsonCreator
   public OkexOrderbook(
       @JsonProperty("asks") List<OkexPublicOrder> asks,
       @JsonProperty("bids") List<OkexPublicOrder> bids,
-      @JsonProperty("ts") String ts) {
+      @JsonProperty("ts") Date ts) {
 
     this.asks = asks;
     this.bids = bids;
@@ -30,8 +32,12 @@ public class OkexOrderbook {
     return bids;
   }
 
+  public Date getTs() {
+    return ts;
+  }
+
   @Override
   public String toString() {
-    return "OkexOrderbookResponse{" + "asks=" + asks + ", bids=" + bids + '}';
+    return "OkexOrderbookResponse{ts=" + ts + "asks=" + asks + ", bids=" + bids + '}';
   }
 }

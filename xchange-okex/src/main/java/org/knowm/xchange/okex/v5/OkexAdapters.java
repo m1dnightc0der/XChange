@@ -1,7 +1,6 @@
 package org.knowm.xchange.okex.v5;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -11,7 +10,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-
 
 import org.apache.commons.lang3.StringUtils;
 import org.knowm.xchange.currency.Currency;
@@ -188,7 +186,7 @@ public class OkexAdapters {
                     adaptOrderbookOrder(
                         okexBid.getVolume(), okexBid.getPrice(), instrument, OrderType.BID)));
 
-    return new OrderBook(Date.from(Instant.now()), asks, bids);
+    return new OrderBook(okexOrderbook.getData().get(0).getTs(), asks, bids);
   }
 
   public static LimitOrder adaptOrderbookOrder(
@@ -354,7 +352,7 @@ public class OkexAdapters {
         .build();
   }
 
-  private static BigDecimal checkForEmpty(String value){
+  private static BigDecimal checkForEmpty(String value) {
     return StringUtils.isEmpty(value) ? null : new BigDecimal(value);
   }
 }
