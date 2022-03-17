@@ -28,12 +28,12 @@ public class FtxOrderbookResponse implements Serializable {
   private final String action;
 
   public FtxOrderbookResponse(
-      @JsonProperty("time") Long time,
+      @JsonProperty("time") BigDecimal time,
       @JsonProperty("checksum") Long checksum,
       @JsonProperty("bids") List<List<BigDecimal>> bids,
       @JsonProperty("asks") List<List<BigDecimal>> asks,
       @JsonProperty("action") String action) {
-    this.time = Date.from(Instant.ofEpochMilli(time));
+    this.time = Date.from(Instant.ofEpochMilli(time.multiply(new BigDecimal(1000)).longValue()));
     this.checksum = checksum;
     this.bids = bids;
     this.asks = asks;

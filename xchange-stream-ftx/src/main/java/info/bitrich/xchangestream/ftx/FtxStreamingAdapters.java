@@ -61,6 +61,7 @@ public class FtxStreamingAdapters {
         .forEach(
             message -> {
               if ("partial".equals(message.getAction())) {
+                orderBook.getTimeStamp().setTime(message.getTime().getTime());
                 message
                     .getAsks()
                     .forEach(
@@ -85,6 +86,7 @@ public class FtxStreamingAdapters {
                                         .originalAmount(bid.get(1))
                                         .build()));
               } else {
+                orderBook.getTimeStamp().setTime(message.getTime().getTime());
                 message
                     .getAsks()
                     .forEach(
@@ -116,7 +118,7 @@ public class FtxStreamingAdapters {
             });
 
     return new OrderBook(
-        Date.from(Instant.now()),
+        orderBook.getTimeStamp(),
         new ArrayList<>(orderBook.getAsks()),
         new ArrayList<>(orderBook.getBids()),
         true);

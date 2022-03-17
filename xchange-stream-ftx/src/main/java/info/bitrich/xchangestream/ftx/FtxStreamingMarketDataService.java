@@ -10,6 +10,8 @@ import org.knowm.xchange.dto.marketdata.Trade;
 import org.knowm.xchange.ftx.FtxAdapters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.time.Instant;
+import java.util.Date;
 
 public class FtxStreamingMarketDataService implements StreamingMarketDataService {
 
@@ -23,7 +25,7 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
 
   @Override
   public Observable<OrderBook> getOrderBook(CurrencyPair currencyPair, Object... args) {
-    OrderBook orderBook = new OrderBook(null, Lists.newArrayList(), Lists.newArrayList());
+    OrderBook orderBook = new OrderBook( Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList());
     String channelName = "orderbook:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair);
 
     return service
@@ -42,7 +44,7 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
                 // Resubscribe to the channel
                 this.service.sendMessage(service.getUnsubscribeMessage(channelName, args));
                 this.service.sendMessage(service.getSubscribeMessage(channelName, args));
-                return new OrderBook(null, Lists.newArrayList(), Lists.newArrayList(), false);
+                return new OrderBook(Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList(), false);
               }
             })
         .filter(ob -> ob.getBids().size() > 0 && ob.getAsks().size() > 0);

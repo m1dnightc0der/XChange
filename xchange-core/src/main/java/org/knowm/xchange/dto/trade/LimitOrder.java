@@ -357,7 +357,7 @@ public class LimitOrder extends Order implements Comparable<LimitOrder> {
               timestamp,
               limitPrice,
               averagePrice,
-              originalAmount == null || remainingAmount == null
+              originalAmount == null || remainingAmount == null  || cumulativeAmount!=null
                   ? cumulativeAmount
                   : originalAmount.subtract(remainingAmount),
               fee,
