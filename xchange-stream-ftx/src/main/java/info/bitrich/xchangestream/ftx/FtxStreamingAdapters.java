@@ -32,7 +32,7 @@ import org.knowm.xchange.instrument.Instrument;
 
 public class FtxStreamingAdapters {
 
-  private static final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
+  private static final ThreadLocal<StreamingObjectMapperHelper> mapper = new ThreadLocal<StreamingObjectMapperHelper>();
   /** Incoming values always has 1 trailing 0 after the decimal, and start with 1 zero */
   private static final ThreadLocal<DecimalFormat> dfp =
       ThreadLocal.withInitial(() -> new DecimalFormat("0.0#######"));
@@ -41,9 +41,8 @@ public class FtxStreamingAdapters {
       ThreadLocal.withInitial(() -> new DecimalFormat("0.####E00"));
   private static final ThreadLocal<DecimalFormat> dfq =
       ThreadLocal.withInitial(() -> new DecimalFormat("0.0#######"));
+  static ThreadLocal<Ticker> NULL_TICKER =new ThreadLocal<Ticker>();
 
-  static Ticker NULL_TICKER =
-      new Ticker.Builder().build(); // not need to create a new one each time
 
   public static OrderBook adaptOrderbookMessage(
       OrderBook orderBook, Instrument instrument, JsonNode jsonNode) {
@@ -53,68 +52,36 @@ public class FtxStreamingAdapters {
         .map(
             res -> {
               try {
-                return mapper.readValue(res.toString(), FtxOrderbookResponse.class);
+                return mapper.get().getObjectMapper().readValue(res.toString(), FtxOrderbookResponse.class);
               } catch (IOException e) {
                 throw new IllegalStateException(e);
               }
             })
         .forEach(
             message -> {
-              if ("partial".equals(message.getAction())) {
-                orderBook.getTimeStamp().setTime(message.getTime().getTime());
-                message
-                    .getAsks()
-                    .forEach(
-                        ask ->
-                            orderBook
-                                .getAsks()
-                                .add(
-                                    new LimitOrder.Builder(Order.OrderType.ASK, instrument)
-                                        .limitPrice(ask.get(0))
-                                        .originalAmount(ask.get(1))
-                                        .build()));
+                  if ("partial".equals(message.getAction())) {
+                  orderBook.getBids().clear();
+                  orderBook.getAsks().clear();
+                  orderBook.getTimeStamp().setTime(message.getTime().getTime());
+                  message.getAsks().forEach(ask -> orderBook.getAsks()
+                      .add(new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
 
-                message
-                    .getBids()
-                    .forEach(
-                        bid ->
-                            orderBook
-                                .getBids()
-                                .add(
-                                    new LimitOrder.Builder(Order.OrderType.BID, instrument)
-                                        .limitPrice(bid.get(0))
-                                        .originalAmount(bid.get(1))
-                                        .build()));
-              } else {
-                orderBook.getTimeStamp().setTime(message.getTime().getTime());
-                message
-                    .getAsks()
-                    .forEach(
-                        ask ->
-                            orderBook.update(
-                                new LimitOrder.Builder(Order.OrderType.ASK, instrument)
-                                    .limitPrice(ask.get(0))
-                                    .originalAmount(ask.get(1))
-                                    .build()));
-                message
-                    .getBids()
-                    .forEach(
-                        bid ->
-                            orderBook.update(
-                                new LimitOrder.Builder(Order.OrderType.BID, instrument)
-                                    .limitPrice(bid.get(0))
-                                    .originalAmount(bid.get(1))
-                                    .build()));
-              }
-
-              if (orderBook.getAsks().size() > 0 && orderBook.getBids().size() > 0) {
-                Long calculatedChecksum =
-                    getOrderbookChecksum(orderBook.getAsks(), orderBook.getBids());
-
-                if (!calculatedChecksum.equals(message.getChecksum())) {
-                  throw new IllegalStateException("Checksum is not correct!");
+                  message.getBids().forEach(bid -> orderBook.getBids()
+                      .add(new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
+                } else {
+                  orderBook.getTimeStamp().setTime(message.getTime().getTime());
+                  message.getAsks().forEach(ask -> orderBook.update(
+                      new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
+                  message.getBids().forEach(bid -> orderBook.update(
+                      new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
                 }
-              }
+
+                if (orderBook.getAsks().size() > 0 && orderBook.getBids().size() > 0) {
+                  Long calculatedChecksum = getOrderbookChecksum(orderBook.getAsks(), orderBook.getBids());
+                  if (!calculatedChecksum.equals(message.getChecksum())) {
+                    throw new IllegalStateException("Checksum is not correct!");
+                  }
+                }
             });
 
     return new OrderBook(
@@ -167,14 +134,14 @@ public class FtxStreamingAdapters {
         .map(
             res -> {
               try {
-                return mapper.readValue(res.toString(), FtxTickerResponse.class);
+                return mapper.get().getObjectMapper().readValue(res.toString(), FtxTickerResponse.class);
               } catch (IOException e) {
                 throw new RuntimeException(e);
               }
             })
         .map(ftxTickerResponse -> ftxTickerResponse.toTicker(instrument))
         .findFirst()
-        .orElse(NULL_TICKER);
+        .orElse(NULL_TICKER.get());
   }
 
   public static Iterable<Trade> adaptTradesMessage(Instrument instrument, JsonNode jsonNode) {
@@ -185,7 +152,7 @@ public class FtxStreamingAdapters {
         .map(
             tradeNode -> {
               try {
-                return mapper.readValue(tradeNode.toString(), FtxTradeDto.class);
+                return mapper.get().getObjectMapper().readValue(tradeNode.toString(), FtxTradeDto.class);
               } catch (IOException e) {
                 throw new RuntimeException(e);
               }
