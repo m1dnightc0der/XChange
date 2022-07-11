@@ -310,6 +310,11 @@ public class FtxAdapters {
     return ftxOrderSide == FtxOrderSide.buy ? Order.OrderType.BID : Order.OrderType.ASK;
   }
 
+  public static Order.OrderType adaptFtxOrderQuantityToAmount(FtxOrderSide ftxOrderSide) {
+
+    return ftxOrderSide == FtxOrderSide.buy ? Order.OrderType.BID : Order.OrderType.ASK;
+  }
+
   private static final Pattern FUTURES_PATTERN = Pattern.compile("PERP|[0-9]+");
 
   public static String adaptCurrencyPairToFtxMarket(CurrencyPair currencyPair) {

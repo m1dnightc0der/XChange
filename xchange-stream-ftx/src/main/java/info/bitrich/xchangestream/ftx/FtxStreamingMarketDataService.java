@@ -33,7 +33,7 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
         .map(
             res -> {
               try {
-                return FtxStreamingAdapters.adaptOrderbookMessage(orderBook, currencyPair, res);
+                  return FtxStreamingAdapters.adaptOrderbookMessage(orderBook, currencyPair, res);
               } catch (IllegalStateException e) {
                 LOG.warn(
                     "Resubscribing {} channel after adapter error {}",
@@ -55,7 +55,7 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
     return service
         .subscribeChannel("ticker:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair))
         .map(res -> FtxStreamingAdapters.adaptTickerMessage(currencyPair, res))
-        .filter(ticker -> ticker != FtxStreamingAdapters.NULL_TICKER); // lets not send these backs
+        .filter(ticker -> ticker != FtxStreamingAdapters.NULL_TICKER.get()); // lets not send these backs
   }
 
   @Override

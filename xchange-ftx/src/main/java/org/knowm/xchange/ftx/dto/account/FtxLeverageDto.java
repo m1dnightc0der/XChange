@@ -6,7 +6,8 @@ public class FtxLeverageDto {
 
   private final int leverage;
 
-  public FtxLeverageDto(@JsonProperty("leverage") int leverage) {
+  public FtxLeverageDto(
+      @JsonProperty("leverage") int leverage) {
     this.leverage = leverage;
   }
 

@@ -41,7 +41,7 @@ public class CurrentTimeIncrementalNonceFactory implements SynchronizedValueFact
   }
 
   @Override
-  public Long createValue() {
+  public synchronized Long createValue() {
     return nonce.updateAndGet(
         prevNonce -> {
           long newNonce = timeFn.get();

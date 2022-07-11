@@ -1,12 +1,16 @@
 package org.knowm.xchange.ftx.dto.trade;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
+import javax.annotation.Nullable;
 import java.math.BigDecimal;
 
 public class FtxModifyOrderRequestPayload {
-
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   private final BigDecimal price;
 
+  @JsonInclude(JsonInclude.Include.NON_NULL)
   private final BigDecimal size;
 
   private final String clientId;
