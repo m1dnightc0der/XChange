@@ -111,6 +111,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       instrumentType,
                       instrumentId,
                       orderType,
+                      "filled",
                       after,
                       before,
                       limit,

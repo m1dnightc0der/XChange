@@ -2,7 +2,6 @@ package org.knowm.xchange.service.trade;
 
 import java.io.IOException;
 import java.util.Collection;
-
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.account.OpenPositions;
 import org.knowm.xchange.dto.meta.CurrencyPairMetaData;
@@ -15,18 +14,18 @@ import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.BaseService;
+import org.knowm.xchange.service.trade.params.CancelAllOrders;
 import org.knowm.xchange.service.trade.params.CancelOrderByIdParams;
 import org.knowm.xchange.service.trade.params.CancelOrderByInstrument;
 import org.knowm.xchange.service.trade.params.CancelOrderParams;
 import org.knowm.xchange.service.trade.params.DefaultCancelOrderParamId;
 import org.knowm.xchange.service.trade.params.TradeHistoryParams;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsAll;
-import org.knowm.xchange.service.trade.params.orders.DefaultQueryOrderParam;
+import org.knowm.xchange.service.trade.params.orders.*;
 import org.knowm.xchange.service.trade.params.orders.DefaultQueryOrderParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParams;
 import org.knowm.xchange.service.trade.params.orders.OrderQueryParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OrderQueryParams;
 
 /**
  * Interface to provide the following to {@link org.knowm.xchange.Exchange}:
@@ -235,6 +234,10 @@ public interface TradeService extends BaseService {
     throw new NotYetImplementedForExchangeException("cancelOrder");
   }
 
+  default Collection<String> cancelAllOrders(CancelAllOrders orderParams) throws IOException {
+    throw new NotYetImplementedForExchangeException("cancelAllOpenOrders");
+  }
+
   /**
    * Fetch the history of user trades.
    *
@@ -344,6 +347,33 @@ public interface TradeService extends BaseService {
     }
     return res;
   }
+
+  static String[] toOrderIds(OrderQueryParams... orderQueryParams) {
+    String[] orderIds = new String[orderQueryParams.length];
+    int index = 0;
+    for (OrderQueryParams orderQueryParam : orderQueryParams) {
+      orderIds[index++] = orderQueryParam.getOrderId();
+    }
+    return orderIds;
+  }
+
+  /**
+   * Returns required get order parameter as classes
+   *
+   * <p>Different trading services requires different parameters for order querying. To provide
+   * generic operation of the trade service interface, This method returns {@link Class} of the
+   * parameter objects as an array. This class information can be utilized by the caller of {@link
+   * #getOrder(OrderQueryParams...)} to create instances of the required parameter such as {@link
+   * org.knowm.xchange.service.trade.params.orders.OrderQueryParamCurrencyPair}, {@link
+   * org.knowm.xchange.service.trade.params.orders.OrderQueryParamInstrument} etc...
+   *
+   * @return Class type for the required parameter class. Default implementation returns an instance
+   *     of {@link OrderQueryParams} element
+   */
+  default Class getRequiredOrderQueryParamClass() {
+    return OrderQueryParams.class;
+  }
+
   /**
    * get's the latest order form the order book that with matching orderQueryParams
    *
