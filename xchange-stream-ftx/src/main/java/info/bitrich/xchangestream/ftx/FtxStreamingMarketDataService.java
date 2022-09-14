@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class FtxStreamingMarketDataService implements StreamingMarketDataService {
 
@@ -24,27 +25,34 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
   }
 
   @Override
-  public Observable<OrderBook> getOrderBook(CurrencyPair currencyPair, Object... args) {
-    OrderBook orderBook = new OrderBook( Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList());
+  public  Observable<OrderBook>  getOrderBook(CurrencyPair currencyPair, Object... args) {
     String channelName = "orderbook:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair);
+    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
+    AtomicReference<OrderBook> orderBook = new AtomicReference<>(new OrderBook(Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList()));
 
     return service
         .subscribeChannel(channelName)
         .map(
             res -> {
+
               try {
-                  return FtxStreamingAdapters.adaptOrderbookMessage(orderBook, currencyPair, res);
-              } catch (IllegalStateException e) {
+                 return streamingAdapter.adaptOrderbookMessage(orderBook.get(), currencyPair, res);
+              } catch (Exception e) {
                 LOG.warn(
                     "Resubscribing {} channel after adapter error {}",
                     currencyPair,
                     e.getMessage());
-                orderBook.getBids().clear();
-                orderBook.getAsks().clear();
+                synchronized (orderBook.get().getBids()) {
+                  orderBook.get().getBids().clear();
+                }
+                synchronized (orderBook.get().getAsks()) {
+                  orderBook.get().getAsks().clear();
+                }
                 // Resubscribe to the channel
                 this.service.sendMessage(service.getUnsubscribeMessage(channelName, args));
                 this.service.sendMessage(service.getSubscribeMessage(channelName, args));
-                return new OrderBook(Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList(), false);
+                orderBook.set(new OrderBook(Date.from(Instant.now()), Lists.newArrayList(), Lists.newArrayList(), false));
+                return orderBook.get();
               }
             })
         .filter(ob -> ob.getBids().size() > 0 && ob.getAsks().size() > 0);
@@ -52,16 +60,20 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
 
   @Override
   public Observable<Ticker> getTicker(CurrencyPair currencyPair, Object... args) {
+    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
+
     return service
         .subscribeChannel("ticker:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair))
-        .map(res -> FtxStreamingAdapters.adaptTickerMessage(currencyPair, res))
-        .filter(ticker -> ticker != FtxStreamingAdapters.NULL_TICKER.get()); // lets not send these backs
+        .map(res -> streamingAdapter.adaptTickerMessage(currencyPair, res))
+        .filter(ticker -> ticker != streamingAdapter.NULL_TICKER.get()); // lets not send these backs
   }
 
   @Override
   public Observable<Trade> getTrades(CurrencyPair currencyPair, Object... args) {
+    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
+
     return service
         .subscribeChannel("trades:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair))
-        .flatMapIterable(res -> FtxStreamingAdapters.adaptTradesMessage(currencyPair, res));
+        .flatMapIterable(res -> streamingAdapter.adaptTradesMessage(currencyPair, res));
   }
 }

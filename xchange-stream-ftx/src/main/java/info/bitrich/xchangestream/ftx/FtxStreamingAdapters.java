@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -32,7 +33,7 @@ import org.knowm.xchange.instrument.Instrument;
 
 public class FtxStreamingAdapters {
 
-  private static final ThreadLocal<StreamingObjectMapperHelper> mapper = new ThreadLocal<StreamingObjectMapperHelper>();
+  private   ThreadLocal<StreamingObjectMapperHelper> mapper = new ThreadLocal<StreamingObjectMapperHelper>();
   /** Incoming values always has 1 trailing 0 after the decimal, and start with 1 zero */
   private static final ThreadLocal<DecimalFormat> dfp =
       ThreadLocal.withInitial(() -> new DecimalFormat("0.0#######"));
@@ -41,10 +42,10 @@ public class FtxStreamingAdapters {
       ThreadLocal.withInitial(() -> new DecimalFormat("0.####E00"));
   private static final ThreadLocal<DecimalFormat> dfq =
       ThreadLocal.withInitial(() -> new DecimalFormat("0.0#######"));
-  static ThreadLocal<Ticker> NULL_TICKER =new ThreadLocal<Ticker>();
+   ThreadLocal<Ticker> NULL_TICKER =new ThreadLocal<Ticker>();
 
 
-  public static OrderBook adaptOrderbookMessage(
+  public  synchronized OrderBook adaptOrderbookMessage(
       OrderBook orderBook, Instrument instrument, JsonNode jsonNode) {
 
     Streams.stream(jsonNode)
@@ -60,25 +61,37 @@ public class FtxStreamingAdapters {
         .forEach(
             message -> {
                   if ("partial".equals(message.getAction())) {
-                  orderBook.getBids().clear();
-                  orderBook.getAsks().clear();
-                  orderBook.getTimeStamp().setTime(message.getTime().getTime());
-                  message.getAsks().forEach(ask -> orderBook.getAsks()
-                      .add(new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
+                    orderBook.getTimeStamp().setTime(message.getTime().getTime());
+                    synchronized(orderBook.getBids()) {
+                      orderBook.getBids().clear();
+                      message.getBids().forEach(bid -> orderBook.getBids()
+                          .add(new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
+                    }
+                    synchronized(orderBook.getAsks()) {
+                      orderBook.getAsks().clear();
+                      message.getAsks().forEach(ask -> orderBook.getAsks()
+                          .add(new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
 
-                  message.getBids().forEach(bid -> orderBook.getBids()
-                      .add(new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
+                    }
+
+
+
                 } else {
                   orderBook.getTimeStamp().setTime(message.getTime().getTime());
-                  message.getAsks().forEach(ask -> orderBook.update(
-                      new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
-                  message.getBids().forEach(bid -> orderBook.update(
-                      new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
+                    synchronized(orderBook.getAsks()) {
+                      message.getAsks().forEach(ask -> orderBook.update(
+                          new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));
+                    }
+                    synchronized(orderBook.getBids()) {
+                      message.getBids().forEach(bid -> orderBook.update(
+                          new LimitOrder.Builder(Order.OrderType.BID, instrument).limitPrice(bid.get(0)).originalAmount(bid.get(1)).build()));
+                    }
                 }
 
                 if (orderBook.getAsks().size() > 0 && orderBook.getBids().size() > 0) {
                   Long calculatedChecksum = getOrderbookChecksum(orderBook.getAsks(), orderBook.getBids());
                   if (!calculatedChecksum.equals(message.getChecksum())) {
+
                     throw new IllegalStateException("Checksum is not correct!");
                   }
                 }
@@ -91,31 +104,28 @@ public class FtxStreamingAdapters {
         true);
   }
 
-  public static Long getOrderbookChecksum(List<LimitOrder> asks, List<LimitOrder> bids) {
+  public synchronized Long getOrderbookChecksum(List<LimitOrder> asks, List<LimitOrder> bids) {
     StringBuilder data = new StringBuilder(3072);
     DecimalFormat fp = dfp.get();
     DecimalFormat fs = dfs.get();
     DecimalFormat fq = dfq.get();
 
     for (int i = 0; i < 100; i++) {
-      if (bids.size() > i) {
-        BigDecimal limitPrice = bids.get(i).getLimitPrice();
-        boolean scientific = limitPrice.toPlainString().startsWith("0.0000");
+      synchronized(bids) {
+        if (bids.size() > i) {
+          BigDecimal limitPrice = bids.get(i).getLimitPrice();
+          boolean scientific = limitPrice.toPlainString().startsWith("0.0000");
 
-        data.append(scientific ? fs.format(limitPrice) : fp.format(limitPrice))
-            .append(":")
-            .append(fq.format(bids.get(i).getOriginalAmount()))
-            .append(":");
+          data.append(scientific ? fs.format(limitPrice) : fp.format(limitPrice)).append(":").append(fq.format(bids.get(i).getOriginalAmount())).append(":");
+        }
       }
+      synchronized(asks) {
+        if (asks.size() > i) {
+          BigDecimal limitPrice = asks.get(i).getLimitPrice();
+          boolean scientific = limitPrice.toPlainString().startsWith("0.0000");
 
-      if (asks.size() > i) {
-        BigDecimal limitPrice = asks.get(i).getLimitPrice();
-        boolean scientific = limitPrice.toPlainString().startsWith("0.0000");
-
-        data.append(scientific ? fs.format(limitPrice) : fp.format(limitPrice))
-            .append(":")
-            .append(fq.format(asks.get(i).getOriginalAmount()))
-            .append(":");
+          data.append(scientific ? fs.format(limitPrice) : fp.format(limitPrice)).append(":").append(fq.format(asks.get(i).getOriginalAmount())).append(":");
+        }
       }
     }
 
@@ -123,12 +133,12 @@ public class FtxStreamingAdapters {
 
     CRC32 crc32 = new CRC32();
     byte[] toBytes = s.getBytes(StandardCharsets.UTF_8);
-    crc32.update(toBytes, 0, toBytes.length - 1);
+    crc32.update(toBytes, 0, Math.max(toBytes.length - 1,0));
 
     return crc32.getValue();
   }
 
-  public static Ticker adaptTickerMessage(Instrument instrument, JsonNode jsonNode) {
+  public  synchronized Ticker adaptTickerMessage(Instrument instrument, JsonNode jsonNode) {
     return Streams.stream(jsonNode)
         .filter(JsonNode::isObject)
         .map(
@@ -144,7 +154,7 @@ public class FtxStreamingAdapters {
         .orElse(NULL_TICKER.get());
   }
 
-  public static Iterable<Trade> adaptTradesMessage(Instrument instrument, JsonNode jsonNode) {
+  public  synchronized Iterable<Trade> adaptTradesMessage(Instrument instrument, JsonNode jsonNode) {
     return Streams.stream(jsonNode)
         .filter(JsonNode::isArray)
         .map(res -> (ArrayNode) res)
@@ -166,11 +176,12 @@ public class FtxStreamingAdapters {
                     .price(ftxTradeDto.getPrice())
                     .type(FtxAdapters.adaptFtxOrderSideToOrderType(ftxTradeDto.getSide()))
                     .originalAmount(ftxTradeDto.getSize())
+                    .liquidation(ftxTradeDto.isLiquidation())
                     .build())
         .collect(Collectors.toList());
   }
 
-  public static UserTrade adaptUserTrade(JsonNode jsonNode) {
+  public synchronized UserTrade adaptUserTrade(JsonNode jsonNode) {
     JsonNode data = jsonNode.get("data");
 
     return new UserTrade.Builder()
@@ -187,7 +198,7 @@ public class FtxStreamingAdapters {
         .build();
   }
 
-  public static Order adaptOrders(JsonNode jsonNode) {
+  public synchronized Order adaptOrders(JsonNode jsonNode) {
     JsonNode data = jsonNode.get("data");
 
     LimitOrder.Builder order =

@@ -143,7 +143,9 @@ public class FtxStreamingMarketDataServiceIntegration {
     JsonNode node = mapper.valueToTree(jsonMap);
     // Verify that the example data was unmarshalled correctly
     OrderBook book = new OrderBook(null, new ArrayList<>(), new ArrayList<>());
-    FtxStreamingAdapters.adaptOrderbookMessage(book, CurrencyPair.BTC_USD, node);
+    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
+
+    streamingAdapter.adaptOrderbookMessage(book, CurrencyPair.BTC_USD, node);
   }
 
   @Test

@@ -107,6 +107,7 @@ public class CoinmateStreamingAdapter {
             : webSocketTrade.getBuyOrderId().toString(),
         webSocketTrade.getType().equals("BUY")
             ? webSocketTrade.getBuyOrderId().toString()
-            : webSocketTrade.getSellOrderId().toString());
+            : webSocketTrade.getSellOrderId().toString(),
+        false);
   }
 }
