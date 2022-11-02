@@ -58,7 +58,7 @@ public class UserTrade extends Trade {
       Currency feeCurrency,
       String orderUserReference) {
 
-    super(type, originalAmount, instrument, price, timestamp, id, null, null);
+    super(type, originalAmount, instrument, price, timestamp, id, null, null, false);
 
     this.orderId = orderId;
     this.feeAmount = feeAmount;

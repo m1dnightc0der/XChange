@@ -30,9 +30,9 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *     not provided
-   * @param asks The ASK orders
-   * @param bids The BID orders
+   *                  not provided
+   * @param asks      The ASK orders
+   * @param bids      The BID orders
    */
   @JsonCreator
   public OrderBook(
@@ -47,10 +47,10 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *     not provided
-   * @param asks The ASK orders
-   * @param bids The BID orders
-   * @param sort True if the asks and bids need to be sorted
+   *                  not provided
+   * @param asks      The ASK orders
+   * @param bids      The BID orders
+   * @param sort      True if the asks and bids need to be sorted
    */
   public OrderBook(Date timeStamp, List<LimitOrder> asks, List<LimitOrder> bids, boolean sort) {
 
@@ -70,9 +70,9 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *     not provided
-   * @param asks The ASK orders
-   * @param bids The BID orders
+   *                  not provided
+   * @param asks      The ASK orders
+   * @param bids      The BID orders
    */
   public OrderBook(Date timeStamp, Stream<LimitOrder> asks, Stream<LimitOrder> bids) {
 
@@ -83,10 +83,10 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *     not provided
-   * @param asks The ASK orders
-   * @param bids The BID orders
-   * @param sort True if the asks and bids need to be sorted
+   *                  not provided
+   * @param asks      The ASK orders
+   * @param bids      The BID orders
+   * @param sort      True if the asks and bids need to be sorted
    */
   public OrderBook(Date timeStamp, Stream<LimitOrder> asks, Stream<LimitOrder> bids, boolean sort) {
 
@@ -138,7 +138,7 @@ public final class OrderBook implements Serializable {
    *
    * @param limitOrder the new LimitOrder
    */
-  public void update(LimitOrder limitOrder) {
+  public synchronized void update(LimitOrder limitOrder) {
 
     update(getOrders(limitOrder.getType()), limitOrder);
     updateDate(limitOrder.getTimestamp());
@@ -187,7 +187,7 @@ public final class OrderBook implements Serializable {
 
   // Replace timeStamp if the provided date is non-null and in the future
   // TODO should this raise an exception if the order timestamp is in the past?
-  private synchronized void updateDate(Date updateDate) {
+  public synchronized void updateDate(Date updateDate) {
 
     if (updateDate != null && (timeStamp == null || updateDate.after(timeStamp))) {
       this.timeStamp = updateDate;
