@@ -359,6 +359,7 @@ public class FtxAdapters {
 
     switch (ftxOrderStatus) {
       case NEW:
+        return OrderStatus.PENDING_NEW;
       case TRIGGERED:
         return OrderStatus.NEW;
       case CLOSED:

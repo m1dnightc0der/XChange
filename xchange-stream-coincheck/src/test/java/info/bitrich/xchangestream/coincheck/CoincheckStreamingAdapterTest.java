@@ -80,7 +80,7 @@ public class CoincheckStreamingAdapterTest {
             null,
             "2357062",
             null,
-            null);
+            null, false);
     assertThat(trade).isEqualTo(expected);
   }
 

@@ -65,7 +65,7 @@ public class FtxStreamingMarketDataService implements StreamingMarketDataService
     return service
         .subscribeChannel("ticker:" + FtxAdapters.adaptCurrencyPairToFtxMarket(currencyPair))
         .map(res -> streamingAdapter.adaptTickerMessage(currencyPair, res))
-        .filter(ticker -> ticker != streamingAdapter.NULL_TICKER.get()); // lets not send these backs
+        .filter(ticker -> ticker != streamingAdapter.NULL_TICKER); // lets not send these backs
   }
 
   @Override

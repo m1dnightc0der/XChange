@@ -68,7 +68,7 @@ public class FtxStreamingAdapters {
         .forEach(
             message -> {
                   if ("partial".equals(message.getAction())) {
-                    orderBook.getTimeStamp().setTime(message.getTime().getTime());
+                    orderBook.updateDate(message.getTime());
 
                       orderBook.getBids().clear();
                       message.getBids().forEach(bid -> orderBook.getBids()
@@ -84,7 +84,7 @@ public class FtxStreamingAdapters {
 
 
                 } else {
-                  orderBook.getTimeStamp().setTime(message.getTime().getTime());
+                  orderBook.updateDate(message.getTime());
 
                       message.getAsks().forEach(ask -> orderBook.update(
                           new LimitOrder.Builder(Order.OrderType.ASK, instrument).limitPrice(ask.get(0)).originalAmount(ask.get(1)).build()));

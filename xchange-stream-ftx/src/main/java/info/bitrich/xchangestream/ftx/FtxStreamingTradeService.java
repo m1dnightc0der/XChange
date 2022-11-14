@@ -19,24 +19,23 @@ public class FtxStreamingTradeService implements StreamingTradeService {
 
   @Override
   public Observable<UserTrade> getUserTrades(CurrencyPair currencyPair, Object... args) {
-    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
+
     return fills
         .filter(jsonNode -> jsonNode.hasNonNull("data"))
         .filter(
             jsonNode ->
                 new CurrencyPair(jsonNode.get("data").get("market").asText()).equals(currencyPair))
-        .map(streamingAdapter::adaptUserTrade);
+        .map(FtxStreamingAdapters::adaptUserTrade);
   }
 
   @Override
   public Observable<Order> getOrderChanges(CurrencyPair currencyPair, Object... args) {
-    FtxStreamingAdapters streamingAdapter = new FtxStreamingAdapters();
 
     return orders
         .filter(jsonNode -> jsonNode.hasNonNull("data"))
         .filter(
             jsonNode ->
                 new CurrencyPair(jsonNode.get("data").get("market").asText()).equals(currencyPair))
-        .map(streamingAdapter::adaptOrders);
+        .map(FtxStreamingAdapters::adaptOrders);
   }
 }
