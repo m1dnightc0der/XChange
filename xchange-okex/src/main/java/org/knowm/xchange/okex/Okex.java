@@ -20,7 +20,8 @@ import org.knowm.xchange.okex.dto.marketdata.OkexCandleStick;
 import org.knowm.xchange.okex.dto.marketdata.OkexInstrument;
 import org.knowm.xchange.okex.dto.marketdata.OkexOrderbook;
 import org.knowm.xchange.okex.dto.marketdata.OkexTrade;
-import org.knowm.xchange.okex.dto.marketdata.OkexPriceLimit;
+import org.knowm.xchange.okex.dto.trade.OkexPriceLimit;
+
 @Path("/api/v5")
 @Produces(APPLICATION_JSON)
 public interface Okex {

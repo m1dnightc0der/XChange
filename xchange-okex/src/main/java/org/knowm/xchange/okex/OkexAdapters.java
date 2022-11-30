@@ -180,8 +180,6 @@ public class OkexAdapters {
     return adaptOrderbookOrder(okexPublicOrder.getVolume(), okexPublicOrder.getPrice(), instrument, orderType);
   }
 
-  public static OrderBook adaptOrderBook(
-      OkexResponse<List<OkexOrderbook>> okexOrderbook, Instrument instrument) {
 
   public static OrderBook adaptOrderBook(List<OkexOrderbook> okexOrderbooks, Instrument instrument) {
     List<LimitOrder> asks = new ArrayList<>();

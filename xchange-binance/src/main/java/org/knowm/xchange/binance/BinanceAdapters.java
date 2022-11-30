@@ -130,7 +130,7 @@ public class BinanceAdapters {
   }
 
   public static OrderType convertType(boolean isBuyer) {
-    return isBuyer ? OrderType.BID : OrderType.ASK;
+    return isBuyer ? OrderType.ASK : OrderType.BID;
   }
 
   public static CurrencyPair adaptSymbol(String symbol) {

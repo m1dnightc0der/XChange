@@ -9,9 +9,10 @@ import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeFactory;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.marketdata.Trade;
-import org.knowm.xchange.okex.v5.dto.OkexResponse;
-import org.knowm.xchange.okex.v5.dto.marketdata.OkexCandleStick;
-import org.knowm.xchange.okex.v5.service.OkexMarketDataService;
+import org.knowm.xchange.okex.OkexExchange;
+import org.knowm.xchange.okex.dto.OkexResponse;
+import org.knowm.xchange.okex.dto.marketdata.OkexCandleStick;
+import org.knowm.xchange.okex.service.OkexMarketDataService;
 
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 

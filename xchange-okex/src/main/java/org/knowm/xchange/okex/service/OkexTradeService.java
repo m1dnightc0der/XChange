@@ -20,6 +20,7 @@ import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexResponse;
 import org.knowm.xchange.okex.dto.trade.OkexCancelOrderRequest;
 import org.knowm.xchange.okex.dto.trade.OkexOrderDetails;
+import org.knowm.xchange.okex.dto.trade.OkexPriceLimit;
 import org.knowm.xchange.service.trade.TradeService;
 import org.knowm.xchange.service.trade.params.CancelOrderByIdParams;
 import org.knowm.xchange.service.trade.params.CancelOrderByInstrument;
@@ -81,7 +82,7 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
   }
 
   public OkexPriceLimit getFuturesPriceLimits(Instrument instrument) throws IOException {
-    return getOkexPriceLimits(OkexAdapters.adaptCurrencyPairId(instrument));
+    return getOkexPriceLimits(OkexAdapters.adaptInstrumentToOkexInstrumentId(instrument));
   }
 
   @Override

@@ -9,11 +9,7 @@ import org.knowm.xchange.okex.OkexExchange;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexResponse;
 import org.knowm.xchange.okex.dto.account.OkexPosition;
-import org.knowm.xchange.okex.dto.trade.OkexAmendOrderRequest;
-import org.knowm.xchange.okex.dto.trade.OkexCancelOrderRequest;
-import org.knowm.xchange.okex.dto.trade.OkexOrderDetails;
-import org.knowm.xchange.okex.dto.trade.OkexOrderRequest;
-import org.knowm.xchange.okex.dto.trade.OkexOrderResponse;
+import org.knowm.xchange.okex.dto.trade.*;
 import org.knowm.xchange.utils.DateUtils;
 
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
@@ -61,6 +57,33 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
+  public OkexResponse<List<OkexPosition>> getPositions(String instrumentType, String instrumentId, String positionId)
+          throws OkexException, IOException {
+    try {
+      return decorateApiCall(
+              () ->
+                      okexAuthenticated.getPositions(
+                              instrumentType,
+                              instrumentId,
+                              positionId,
+                              exchange.getExchangeSpecification().getApiKey(),
+                              signatureCreator,
+                              DateUtils.toUTCISODateString(new Date()),
+                              (String)
+                                      exchange
+                                              .getExchangeSpecification()
+                                              .getExchangeSpecificParametersItem("passphrase"),
+                              (String)
+                                      exchange
+                                              .getExchangeSpecification()
+                                              .getExchangeSpecificParametersItem("simulated")))
+              .withRateLimiter(rateLimiter(OkexAuthenticated.positionsPath))
+              .call();
+    } catch (OkexException e) {
+      throw handleError(e);
+    }
+  }
+
   public OkexResponse<List<OkexOrderDetails>> getOkexOrder(String instrumentId, String orderId)
       throws IOException {
     try {
@@ -81,7 +104,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       instrumentId,
                       orderId,
                       null))
-          .withRateLimiter((rateLimiter(orderDetailsPath)))
+          .withRateLimiter((rateLimiter(OkexAuthenticated.orderDetailsPath)))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -118,7 +141,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                           exchange
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated")))
-          .withRateLimiter((rateLimiter(orderDetailsPath)))
+          .withRateLimiter((rateLimiter(OkexAuthenticated.orderDetailsPath)))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -144,7 +167,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated"),
                       order))
-          .withRateLimiter(rateLimiter(placeOrderPath))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.placeOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -170,7 +193,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated"),
                       orders))
-          .withRateLimiter(rateLimiter(placeBatchOrderPath))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.placeBatchOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -196,7 +219,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated"),
                       order))
-          .withRateLimiter(rateLimiter(cancelOrderPath))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.cancelOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -222,7 +245,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated"),
                       orders))
-          .withRateLimiter(rateLimiter(cancelBatchOrderPath))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.cancelBatchOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);
@@ -248,7 +271,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               .getExchangeSpecification()
                               .getExchangeSpecificParametersItem("simulated"),
                       order))
-          .withRateLimiter(rateLimiter(amendOrderPath))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.amendOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);

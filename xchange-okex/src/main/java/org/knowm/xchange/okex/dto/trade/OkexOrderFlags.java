@@ -1,4 +1,4 @@
-package org.knowm.xchange.okex.v5.dto.trade;
+package org.knowm.xchange.okex.dto.trade;
 
 import org.knowm.xchange.dto.Order.IOrderFlags;
 
