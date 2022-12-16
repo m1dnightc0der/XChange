@@ -12,6 +12,7 @@ import org.knowm.xchange.binance.service.BinanceMarketDataService;
 import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.examples.binance.BinanceDemoUtils;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.marketdata.MarketDataService;
 
 public class BinanceMarketDataDemo {
@@ -35,9 +36,9 @@ public class BinanceMarketDataDemo {
       throws IOException {
 
     List<BinanceTicker24h> tickers = new ArrayList<>();
-    for (CurrencyPair cp : exchange.getExchangeMetaData().getCurrencyPairs().keySet()) {
-      if (cp.counter == Currency.USDT) {
-        tickers.add(marketDataService.ticker24h(cp));
+    for (Instrument cp : exchange.getExchangeMetaData().getInstruments().keySet()) {
+      if (cp.getCounter() == Currency.USDT) {
+        tickers.add(marketDataService.ticker24hAllProducts((CurrencyPair) cp));
       }
     }
 
@@ -52,12 +53,10 @@ public class BinanceMarketDataDemo {
 
     tickers.stream()
         .forEach(
-            t -> {
-              System.out.println(
-                  t.getCurrencyPair()
-                      + " => "
-                      + String.format("%+.2f%%", t.getPriceChangePercent()));
-            });
+            t -> System.out.println(
+                t.getInstrument()
+                    + " => "
+                    + String.format("%+.2f%%", t.getPriceChangePercent())));
     System.out.println("raw out end");
   }
 
@@ -65,7 +64,7 @@ public class BinanceMarketDataDemo {
       throws IOException {
 
     List<BinanceTicker24h> tickers = new ArrayList<>();
-    tickers.addAll(marketDataService.ticker24h());
+    tickers.addAll(marketDataService.ticker24hAllProducts());
     Collections.sort(
         tickers,
         new Comparator<BinanceTicker24h>() {
@@ -77,9 +76,7 @@ public class BinanceMarketDataDemo {
 
     tickers.stream()
         .forEach(
-            t -> {
-              System.out.println(
-                  t.getSymbol() + " => " + String.format("%+.2f%%", t.getLastPrice()));
-            });
+            t -> System.out.println(
+                t.getSymbol() + " => " + String.format("%+.2f%%", t.getLastPrice())));
   }
 }

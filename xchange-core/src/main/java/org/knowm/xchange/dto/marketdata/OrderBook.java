@@ -13,6 +13,7 @@ import java.util.stream.Stream;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.Order.OrderType;
 import org.knowm.xchange.dto.trade.LimitOrder;
+import org.knowm.xchange.instrument.Instrument;
 
 /** DTO representing the exchange order book */
 public final class OrderBook implements Serializable {
@@ -104,7 +105,7 @@ public final class OrderBook implements Serializable {
   private static LimitOrder withAmount(LimitOrder limitOrder, BigDecimal tradeableAmount) {
 
     OrderType type = limitOrder.getType();
-    CurrencyPair currencyPair = limitOrder.getCurrencyPair();
+    Instrument currencyPair = limitOrder.getInstrument();
     String id = limitOrder.getId();
     Date date = limitOrder.getTimestamp();
     BigDecimal limit = limitOrder.getLimitPrice();
