@@ -12,6 +12,9 @@ import org.knowm.xchange.okex.dto.account.OkexPosition;
 import org.knowm.xchange.okex.dto.trade.*;
 import org.knowm.xchange.utils.DateUtils;
 
+import static org.knowm.xchange.okex.OkexExchange.PARAM_PASSPHRASE;
+import static org.knowm.xchange.okex.OkexExchange.PARAM_SIMULATED;
+
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
 public class OkexTradeServiceRaw extends OkexBaseService {
   public OkexTradeServiceRaw(OkexExchange exchange, ResilienceRegistries resilienceRegistries) {
@@ -38,11 +41,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       instrumentType,
                       underlying,
                       instrumentId,
@@ -72,11 +75,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                               (String)
                                       exchange
                                               .getExchangeSpecification()
-                                              .getExchangeSpecificParametersItem("passphrase"),
+                                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                               (String)
                                       exchange
                                               .getExchangeSpecification()
-                                              .getExchangeSpecificParametersItem("simulated")))
+                                              .getExchangeSpecificParametersItem(PARAM_SIMULATED)))
               .withRateLimiter(rateLimiter(OkexAuthenticated.positionsPath))
               .call();
     } catch (OkexException e) {
@@ -96,11 +99,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       instrumentId,
                       orderId,
                       null))
@@ -136,11 +139,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated")))
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED)))
           .withRateLimiter((rateLimiter(OkexAuthenticated.orderDetailsPath)))
           .call();
     } catch (OkexException e) {
@@ -148,7 +151,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-place-order */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-place-order">...</a> */
   public OkexResponse<List<OkexOrderResponse>> placeOkexOrder(OkexOrderRequest order)
       throws IOException {
     try {
@@ -161,11 +164,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       order))
           .withRateLimiter(rateLimiter(OkexAuthenticated.placeOrderPath))
           .call();
@@ -174,7 +177,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-place-multiple-orders */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-place-multiple-orders">...</a> */
   public OkexResponse<List<OkexOrderResponse>> placeOkexOrder(List<OkexOrderRequest> orders)
       throws IOException {
     try {
@@ -187,11 +190,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       orders))
           .withRateLimiter(rateLimiter(OkexAuthenticated.placeBatchOrderPath))
           .call();
@@ -200,7 +203,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-cancel-order */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-cancel-order">...</a> */
   public OkexResponse<List<OkexOrderResponse>> cancelOkexOrder(OkexCancelOrderRequest order)
       throws IOException {
     try {
@@ -213,11 +216,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       order))
           .withRateLimiter(rateLimiter(OkexAuthenticated.cancelOrderPath))
           .call();
@@ -226,7 +229,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-cancel-multiple-orders */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-cancel-multiple-orders">...</a> */
   public OkexResponse<List<OkexOrderResponse>> cancelOkexOrder(List<OkexCancelOrderRequest> orders)
       throws IOException {
     try {
@@ -239,11 +242,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       orders))
           .withRateLimiter(rateLimiter(OkexAuthenticated.cancelBatchOrderPath))
           .call();
@@ -252,7 +255,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-amend-order */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-amend-order">...</a> */
   public OkexResponse<List<OkexOrderResponse>> amendOkexOrder(OkexAmendOrderRequest order)
       throws IOException {
     try {
@@ -265,11 +268,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       order))
           .withRateLimiter(rateLimiter(OkexAuthenticated.amendOrderPath))
           .call();
@@ -278,7 +281,7 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  /** https://www.okex.com/docs-v5/en/#rest-api-trade-amend-multiple-orders */
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-amend-multiple-orders">...</a> */
   public OkexResponse<List<OkexOrderResponse>> amendOkexOrder(List<OkexAmendOrderRequest> orders)
       throws IOException {
     try {
@@ -291,11 +294,11 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("passphrase"),
+                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
                       (String)
                           exchange
                               .getExchangeSpecification()
-                              .getExchangeSpecificParametersItem("simulated"),
+                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
                       orders))
           .withRateLimiter(rateLimiter(OkexAuthenticated.amendBatchOrderPath))
           .call();

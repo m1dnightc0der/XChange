@@ -1,12 +1,8 @@
 package org.knowm.xchange.okex.dto.trade;
 
-import org.knowm.xchange.dto.Order.IOrderFlags;
+import org.knowm.xchange.dto.Order;
 
-public enum OkexOrderFlags implements IOrderFlags {
-
-  /**
-   * This type of order can be placed to open or close rather than netting controlled by order
-   * placement type
-   */
-  LONG_SHORT
+public enum OkexOrderFlags implements Order.IOrderFlags {
+    POST_ONLY,
+    REDUCE_ONLY
 }

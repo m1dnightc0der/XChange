@@ -10,7 +10,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.Order.OrderType;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.instrument.Instrument;
@@ -31,9 +30,9 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *                  not provided
-   * @param asks      The ASK orders
-   * @param bids      The BID orders
+   *     not provided
+   * @param asks The ASK orders
+   * @param bids The BID orders
    */
   @JsonCreator
   public OrderBook(
@@ -48,10 +47,10 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *                  not provided
-   * @param asks      The ASK orders
-   * @param bids      The BID orders
-   * @param sort      True if the asks and bids need to be sorted
+   *     not provided
+   * @param asks The ASK orders
+   * @param bids The BID orders
+   * @param sort True if the asks and bids need to be sorted
    */
   public OrderBook(Date timeStamp, List<LimitOrder> asks, List<LimitOrder> bids, boolean sort) {
 
@@ -71,9 +70,9 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *                  not provided
-   * @param asks      The ASK orders
-   * @param bids      The BID orders
+   *     not provided
+   * @param asks The ASK orders
+   * @param bids The BID orders
    */
   public OrderBook(Date timeStamp, Stream<LimitOrder> asks, Stream<LimitOrder> bids) {
 
@@ -84,10 +83,10 @@ public final class OrderBook implements Serializable {
    * Constructor
    *
    * @param timeStamp - the timestamp of the orderbook according to the exchange's server, null if
-   *                  not provided
-   * @param asks      The ASK orders
-   * @param bids      The BID orders
-   * @param sort      True if the asks and bids need to be sorted
+   *     not provided
+   * @param asks The ASK orders
+   * @param bids The BID orders
+   * @param sort True if the asks and bids need to be sorted
    */
   public OrderBook(Date timeStamp, Stream<LimitOrder> asks, Stream<LimitOrder> bids, boolean sort) {
 
@@ -105,11 +104,11 @@ public final class OrderBook implements Serializable {
   private static LimitOrder withAmount(LimitOrder limitOrder, BigDecimal tradeableAmount) {
 
     OrderType type = limitOrder.getType();
-    Instrument currencyPair = limitOrder.getInstrument();
+    Instrument instrument = limitOrder.getInstrument();
     String id = limitOrder.getId();
     Date date = limitOrder.getTimestamp();
     BigDecimal limit = limitOrder.getLimitPrice();
-    return new LimitOrder(type, tradeableAmount, currencyPair, id, date, limit);
+    return new LimitOrder(type, tradeableAmount, instrument, id, date, limit);
   }
 
   public Date getTimeStamp() {
@@ -139,14 +138,14 @@ public final class OrderBook implements Serializable {
    *
    * @param limitOrder the new LimitOrder
    */
-  public synchronized void update(LimitOrder limitOrder) {
+  public void update(LimitOrder limitOrder) {
 
     update(getOrders(limitOrder.getType()), limitOrder);
     updateDate(limitOrder.getTimestamp());
   }
 
   // Replace the amount for limitOrder's price in the provided list.
-  private synchronized void update(List<LimitOrder> asks, LimitOrder limitOrder) {
+  private void update(List<LimitOrder> asks, LimitOrder limitOrder) {
 
     int idx = Collections.binarySearch(asks, limitOrder);
     if (idx >= 0) {
@@ -167,7 +166,7 @@ public final class OrderBook implements Serializable {
    *
    * @param orderBookUpdate the new OrderBookUpdate
    */
-  public synchronized void update(OrderBookUpdate orderBookUpdate) {
+  public void update(OrderBookUpdate orderBookUpdate) {
 
     LimitOrder limitOrder = orderBookUpdate.getLimitOrder();
     List<LimitOrder> limitOrders = getOrders(limitOrder.getType());
@@ -188,7 +187,7 @@ public final class OrderBook implements Serializable {
 
   // Replace timeStamp if the provided date is non-null and in the future
   // TODO should this raise an exception if the order timestamp is in the past?
-  public synchronized void updateDate(Date updateDate) {
+  private void updateDate(Date updateDate) {
 
     if (updateDate != null && (timeStamp == null || updateDate.after(timeStamp))) {
       this.timeStamp = updateDate;
