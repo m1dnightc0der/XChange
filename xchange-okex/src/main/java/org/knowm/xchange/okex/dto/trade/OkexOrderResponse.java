@@ -10,6 +10,9 @@ public class OkexOrderResponse {
   @JsonProperty("ordId")
   private String orderId;
 
+  @JsonProperty("algoId")
+  private String algoOrderId;
+
   @JsonProperty("clOrdId")
   private String clientOrderId;
 

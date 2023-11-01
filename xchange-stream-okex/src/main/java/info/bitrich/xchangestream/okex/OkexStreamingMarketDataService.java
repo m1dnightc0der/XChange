@@ -97,13 +97,19 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
                             LOG.error(String.format("Failed to get orderBook, instId=%s.", instId));
                             return Observable.fromIterable(new LinkedList<>());
                         }
-                        List<OkexPublicOrder> asks = mapper.treeToValue(jsonNode.get("data").get(0).get("asks"), mapper.getTypeFactory().constructCollectionType(List.class, OkexPublicOrder.class));
+                      List<OkexOrderbook> okexOrderbooks = mapper.treeToValue(jsonNode.get("data"), mapper.getTypeFactory().constructCollectionType(List.class, OkexOrderbook.class));
+
+                      List<OkexPublicOrder> asks =  okexOrderbooks
+                          .get(0)
+                          .getAsks();
                         asks.forEach(okexPublicOrder -> orderBook.update(OkexAdapters.adaptLimitOrder(okexPublicOrder, instrument, Order.OrderType.ASK)));
 
-                        List<OkexPublicOrder> bids = mapper.treeToValue(jsonNode.get("data").get(0).get("bids"), mapper.getTypeFactory().constructCollectionType(List.class, OkexPublicOrder.class));
+                        List<OkexPublicOrder> bids = okexOrderbooks
+                            .get(0)
+                            .getBids();
                         bids.forEach(okexPublicOrder -> orderBook.update(OkexAdapters.adaptLimitOrder(okexPublicOrder, instrument, Order.OrderType.BID)));
-
-                        return Observable.just(orderBook);
+                       orderBook.updateDate(okexOrderbooks.get(0).getTs());
+                      return Observable.just(orderBook);
 
                     } else {
                         LOG.error(String.format("Unexpected books action=%s, message=%s", action, jsonNode));

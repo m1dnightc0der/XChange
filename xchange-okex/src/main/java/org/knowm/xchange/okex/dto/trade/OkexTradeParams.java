@@ -10,10 +10,18 @@ public class OkexTradeParams {
       implements CancelOrderByIdParams, CancelOrderByInstrument {
     public final Instrument instrument;
     public final String orderId;
+    private final Boolean isAlgoOrder;
 
     public OkexCancelOrderParams(Instrument instrument, String orderId) {
       this.instrument = instrument;
       this.orderId = orderId;
+      this.isAlgoOrder=false;
+    }
+
+    public OkexCancelOrderParams(Instrument instrument, String orderId, Boolean isAlgoOrder) {
+      this.instrument = instrument;
+      this.orderId = orderId;
+      this.isAlgoOrder=isAlgoOrder;
     }
 
     @Override
@@ -25,5 +33,10 @@ public class OkexTradeParams {
     public Instrument getInstrument() {
       return instrument;
     }
+    public Boolean getIsAlgoOrder() {
+      return isAlgoOrder;
+    }
+
+
   }
 }

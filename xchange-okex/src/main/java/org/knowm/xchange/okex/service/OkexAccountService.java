@@ -1,21 +1,24 @@
 package org.knowm.xchange.okex.service;
 
 import org.knowm.xchange.client.ResilienceRegistries;
+import org.knowm.xchange.currency.CurrencyPair;
+import org.knowm.xchange.derivative.FuturesContract;
+import org.knowm.xchange.derivative.OptionsContract;
 import org.knowm.xchange.dto.account.AccountInfo;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
 import org.knowm.xchange.okex.OkexExchange;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexResponse;
-import org.knowm.xchange.okex.dto.account.OkexAccountPositionRisk;
-import org.knowm.xchange.okex.dto.account.OkexAssetBalance;
-import org.knowm.xchange.okex.dto.account.OkexWalletBalance;
-import org.knowm.xchange.okex.dto.account.OkexWithdrawalResponse;
+import org.knowm.xchange.okex.dto.account.*;
 import org.knowm.xchange.service.account.AccountService;
 import org.knowm.xchange.service.trade.params.DefaultWithdrawFundsParams;
 import org.knowm.xchange.service.trade.params.WithdrawFundsParams;
 
 import java.io.IOException;
 import java.util.List;
+
+import static org.knowm.xchange.okex.OkexAdapters.*;
 
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
 public class OkexAccountService extends OkexAccountServiceRaw implements AccountService {
@@ -35,6 +38,34 @@ public class OkexAccountService extends OkexAccountServiceRaw implements Account
         OkexAdapters.adaptOkexAssetBalances(assetBalances.getData()),
         OkexAdapters.adaptOkexAccountPositionRisk(positionRis.getData())
     );
+  }
+
+
+  public OkexResponse<List<OkexSetLeverageResponse>> setLeverage(Instrument instrument, Integer leverage, String marginMode, String positionSide)
+      throws OkexException, IOException {
+
+
+    if (instrument instanceof FuturesContract ) {
+      return setLeverage(OkexAdapters.adaptInstrument(instrument), "",leverage.toString(),  marginMode,  positionSide);
+
+
+    } else if (instrument instanceof CurrencyPair) {
+ if(positionSide== null || (positionSide!= null && !positionSide.equals("short"))) {
+        return setLeverage("", instrument.getBase().getCurrencyCode(), leverage.toString(), marginMode, positionSide);
+      } else {
+ return setLeverage("", instrument.getCounter().getCurrencyCode(), leverage.toString(),  marginMode,  positionSide);
+ }
+    } else {
+      return null;
+    }
+  }
+
+
+  public OkexResponse<List<OkexSetLeverageResponse>> getLeverage(Instrument instrument,String marginMode )
+      throws OkexException, IOException {
+
+    return getLeverage(OkexAdapters.adaptInstrument(instrument), marginMode);
+
   }
 
   @Override

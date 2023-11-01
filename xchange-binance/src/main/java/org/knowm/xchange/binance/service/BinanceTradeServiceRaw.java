@@ -21,6 +21,10 @@ import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.instrument.Instrument;
+import si.mazi.rescu.SynchronizedValueFactory;
+
+import javax.ws.rs.FormParam;
+import javax.ws.rs.QueryParam;
 
 public class BinanceTradeServiceRaw extends BinanceBaseService {
 
@@ -138,6 +142,49 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
             .call();
   }
 
+  public BinanceNewOrder newMarginOrder(
+      Instrument pair,
+      Boolean isIsolated,
+      OrderSide side,
+      OrderType type,
+      TimeInForce timeInForce,
+      BigDecimal quantity,
+      BigDecimal quoteOrderQty,
+      BigDecimal price,
+      String newClientOrderId,
+      BigDecimal stopPrice,
+      BigDecimal icebergQty,
+      BinanceNewOrder.NewOrderResponseType newOrderRespType,
+      BinanceNewOrder.SideEffectType newSideEffectType)
+      throws IOException, BinanceException {
+    return decorateApiCall(
+        () ->
+            binance.newMarginOrder(
+                BinanceAdapters.toSymbol(pair),
+                isIsolated,
+                side,
+                type,
+                quantity,
+                quoteOrderQty,
+                price,
+                stopPrice,
+                newClientOrderId,
+                icebergQty,
+                newOrderRespType,
+                newSideEffectType,
+                timeInForce,
+                getRecvWindow(),
+                getTimestampFactory(),
+                apiKey,
+                signatureCreator
+                ))
+        .withRetry(retry("newMarginOrder", NON_IDEMPOTENT_CALLS_RETRY_CONFIG_NAME))
+        .withRateLimiter(rateLimiter(ORDERS_PER_SECOND_RATE_LIMITER))
+        .withRateLimiter(rateLimiter(ORDERS_PER_DAY_RATE_LIMITER))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER))
+        .call();
+  }
+
   public void testNewOrder(
       Instrument pair,
       OrderSide side,
@@ -174,7 +221,11 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
         .call();
   }
 
-  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId)
+  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId) throws IOException, BinanceException {
+   return orderStatusAllProducts( pair,  orderId,  origClientOrderId, false);
+  }
+
+  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId, Boolean isMarginOrder)
       throws IOException, BinanceException {
     return decorateApiCall(
             () ->
@@ -188,7 +239,19 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
                             super.apiKey,
                             super.signatureCreator
                     )
-            :   binance.orderStatus(
+            :   isMarginOrder ?
+                        binance.marginOrderStatus(
+
+                            BinanceAdapters.toSymbol(pair),
+                                Boolean.FALSE,
+                            orderId,
+                            origClientOrderId,
+                            getRecvWindow(),
+                            getTimestampFactory(),
+                            super.apiKey,
+                            super.signatureCreator)
+
+        : binance.orderStatus(
                     BinanceAdapters.toSymbol(pair),
                     orderId,
                     origClientOrderId,
@@ -201,8 +264,13 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
         .call();
   }
 
+  public BinanceCancelledOrder cancelOrderAllProducts(Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
+      throws IOException, BinanceException {
+   return cancelOrderAllProducts(pair,  orderId,  origClientOrderId,  newClientOrderId,false);
+  }
+
   public BinanceCancelledOrder cancelOrderAllProducts(
-      Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
+      Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId,  Boolean isMarginOrder)
       throws IOException, BinanceException {
     return decorateApiCall(
             () ->
@@ -215,7 +283,18 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
                             getTimestampFactory(),
                             super.apiKey,
                             super.signatureCreator
-                    )
+                    ) :
+                        isMarginOrder ?
+                            binance.cancelMarginOrder(
+                                BinanceAdapters.toSymbol(pair),
+                                Boolean.FALSE,
+                                orderId,
+                                origClientOrderId,
+                                newClientOrderId,
+                                getRecvWindow(),
+                                getTimestampFactory(),
+                                super.apiKey,
+                                super.signatureCreator)
             :   binance.cancelOrder(
                     BinanceAdapters.toSymbol(pair),
                     orderId,

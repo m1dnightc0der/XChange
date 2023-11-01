@@ -144,8 +144,11 @@ public class OkexAccountServiceRaw extends OkexBaseService {
   public OkexResponse<List<OkexSetLeverageResponse>> setLeverage(String instrumentId, String currency, String leverage, String marginMode, String positionSide)
       throws OkexException, IOException {
     try {
+
       OkexSetLeverageRequest requestPayload = OkexSetLeverageRequest.builder()
-              .instrumentId(instrumentId)
+              .instrumentId(
+
+                  instrumentId)
               .currency(currency)
               .leverage(leverage)
               .marginMode(marginMode)
@@ -173,6 +176,33 @@ public class OkexAccountServiceRaw extends OkexBaseService {
     } catch (OkexException e) {
       throw handleError(e);
     }
+  }
+
+  public OkexResponse<List<OkexSetLeverageResponse>> getLeverage(String instrumentId, String marginMode)
+      throws OkexException, IOException {
+      try {
+        return decorateApiCall(
+            () ->
+                    okexAuthenticated.getLeverage(
+                        instrumentId,
+                        marginMode,
+                        exchange.getExchangeSpecification().getApiKey(),
+                        signatureCreator,
+                        DateUtils.toUTCISODateString(new Date()),
+                        (String)
+                            exchange
+                                .getExchangeSpecification()
+                                .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
+                        (String)
+                            exchange
+                                .getExchangeSpecification()
+                                .getExchangeSpecificParametersItem(PARAM_SIMULATED)))
+            .withRateLimiter(rateLimiter(OkexAuthenticated.getLeveragePath))
+            .call();
+
+      } catch (OkexException e) {
+        throw handleError(e);
+      }
   }
 
   public OkexResponse<List<OkexDepositAddress>> getDepositAddress(String currency)

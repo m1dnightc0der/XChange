@@ -127,16 +127,16 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
             && !service.getProductSubscription().getOrderBook().contains(instrument)) {
       throw new UpFrontSubscriptionRequiredException();
     }
-    if(instrument instanceof FuturesContract){
-      return service.subscribeChannel(channelFromCurrency(instrument, BinanceSubscriptionType.DEPTH20.getType()))
+/*    if(instrument instanceof FuturesContract){
+      return service.subscribeChannel(channelFromCurrency(instrument, BinanceSubscriptionType.DEPTH.getType()))
               .map(it -> this.<DepthBinanceWebSocketTransaction>readTransaction(
                                       it, DEPTH_TYPE, "order book"))
               .map(BinanceWebsocketTransaction::getData)
               .filter(data -> BinanceAdapters.adaptSymbol(data.getSymbol(), true).equals(instrument))
               .map(BinanceStreamingAdapters::adaptFuturesOrderbook);
-    } else {
+    } else {*/
       return orderbookSubscriptions.computeIfAbsent(instrument, this::initOrderBookIfAbsent);
-    }
+   // }
   }
 
   @Override
@@ -471,8 +471,8 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
             it ->
                 this.<DepthBinanceWebSocketTransaction>readTransaction(
                     it, DEPTH_TYPE, "order book"))
-        .map(BinanceWebsocketTransaction::getData)
-        .filter(data -> BinanceAdapters.adaptSymbol(data.getSymbol(), instrument instanceof FuturesContract).equals(instrument));
+        .map(e -> e.getData())
+       .filter(data -> data.getSymbol()!=null);
   }
 
   private Observable<OrderBook> createOrderBookObservable(Instrument instrument) {
@@ -493,9 +493,10 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
         .filter(transaction -> subscription.snapshotLastUpdateId.get() > 0L)
 
         // 4. Drop any event where u is <= lastUpdateId in the snapshot
-        .filter(depth -> depth.getLastUpdateId() > subscription.snapshotLastUpdateId.get())
+        .filter(depth ->  ( instrument instanceof FuturesContract ? depth.getLastUpdateId() >= subscription.snapshotLastUpdateId.get():  depth.getLastUpdateId() > subscription.snapshotLastUpdateId.get()) )
 
-        // 5. The first processed should have U <= lastUpdateId+1 AND u >= lastUpdateId+1, and
+
+      // 5. The first processed should have U <= lastUpdateId+1 AND u >= lastUpdateId+1, and
         // subsequent events would
         // normally have u == lastUpdateId + 1 which is stricter version of the above - let's be
         // more relaxed
@@ -507,15 +508,10 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
               if (lastUpdateId == 0L) {
                 result = true;
               } else {
-                if(instrument instanceof FuturesContract){
-                  result =
-                          depth.getFirstUpdateId() <= lastUpdateId
-                                  && depth.getLastUpdateId() >= lastUpdateId;
-                } else {
-                  result =
-                          depth.getFirstUpdateId() <= lastUpdateId + 1
-                                  && depth.getLastUpdateId() >= lastUpdateId + 1;
-                }
+                result = instrument instanceof FuturesContract ? ((depth.getFirstUpdateId() <= lastUpdateId
+                    && depth.getLastUpdateId() >= lastUpdateId ) || (depth.getFinalUpdateId()<= lastUpdateId)) :
+                    (depth.getFirstUpdateId() <= lastUpdateId + 1
+                        && depth.getLastUpdateId() >= lastUpdateId + 1);
               }
               if (result) {
                 subscription.lastUpdateId.set(depth.getLastUpdateId());

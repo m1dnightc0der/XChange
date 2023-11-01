@@ -145,7 +145,7 @@ public final class OrderBook implements Serializable {
   }
 
   // Replace the amount for limitOrder's price in the provided list.
-  private void update(List<LimitOrder> asks, LimitOrder limitOrder) {
+  private synchronized void update(List<LimitOrder> asks, LimitOrder limitOrder) {
 
     int idx = Collections.binarySearch(asks, limitOrder);
     if (idx >= 0) {
@@ -166,7 +166,7 @@ public final class OrderBook implements Serializable {
    *
    * @param orderBookUpdate the new OrderBookUpdate
    */
-  public void update(OrderBookUpdate orderBookUpdate) {
+  public synchronized void update(OrderBookUpdate orderBookUpdate) {
 
     LimitOrder limitOrder = orderBookUpdate.getLimitOrder();
     List<LimitOrder> limitOrders = getOrders(limitOrder.getType());
@@ -187,7 +187,7 @@ public final class OrderBook implements Serializable {
 
   // Replace timeStamp if the provided date is non-null and in the future
   // TODO should this raise an exception if the order timestamp is in the past?
-  private void updateDate(Date updateDate) {
+  public synchronized void updateDate(Date updateDate) {
 
     if (updateDate != null && (timeStamp == null || updateDate.after(timeStamp))) {
       this.timeStamp = updateDate;

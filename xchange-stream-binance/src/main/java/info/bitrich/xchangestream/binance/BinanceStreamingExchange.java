@@ -263,7 +263,7 @@ public class BinanceStreamingExchange extends BinanceExchange implements Streami
                     ? BinanceSubscriptionType.BOOK_TICKER.getType()
                     : BinanceSubscriptionType.TICKER.getType()),
             buildSubscriptionStrings(subscription.getOrderBook(), BinanceSubscriptionType.DEPTH.getType()),
-            buildSubscriptionStrings(subscription.getOrderBook(), BinanceSubscriptionType.DEPTH20.getType()),
+           // buildSubscriptionStrings(subscription.getOrderBook(), BinanceSubscriptionType.DEPTH20.getType()),
             buildSubscriptionStrings(subscription.getTrades(), BinanceSubscriptionType.TRADE.getType()),
             buildSubscriptionStrings(subscription.getFundingRates(), BinanceSubscriptionType.FUNDING_RATES.getType())
             )

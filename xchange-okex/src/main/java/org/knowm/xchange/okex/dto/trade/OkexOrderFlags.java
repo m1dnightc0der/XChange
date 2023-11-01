@@ -4,5 +4,7 @@ import org.knowm.xchange.dto.Order;
 
 public enum OkexOrderFlags implements Order.IOrderFlags {
     POST_ONLY,
-    REDUCE_ONLY
+    REDUCE_ONLY,
+    LONG_SHORT,
+    CROSS_MARGIN
 }

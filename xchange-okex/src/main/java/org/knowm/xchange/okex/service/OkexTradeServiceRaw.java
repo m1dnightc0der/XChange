@@ -177,6 +177,34 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
+
+  /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-place-order">...</a> */
+  public OkexResponse<List<OkexOrderResponse>> placeOkexAlgoOrder(OkexOrderRequest order)
+      throws IOException {
+    try {
+      return decorateApiCall(
+          () ->
+              okexAuthenticated.placeAlgoOrder(
+                  exchange.getExchangeSpecification().getApiKey(),
+                  signatureCreator,
+                  DateUtils.toUTCISODateString(new Date()),
+                  (String)
+                      exchange
+                          .getExchangeSpecification()
+                          .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
+                  (String)
+                      exchange
+                          .getExchangeSpecification()
+                          .getExchangeSpecificParametersItem(PARAM_SIMULATED),
+                  order))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.placeOrderPath))
+          .call();
+    } catch (OkexException e) {
+      throw handleError(e);
+    }
+  }
+
+
   /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-place-multiple-orders">...</a> */
   public OkexResponse<List<OkexOrderResponse>> placeOkexOrder(List<OkexOrderRequest> orders)
       throws IOException {
@@ -229,6 +257,30 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
+  public OkexResponse<List<OkexOrderResponse>> cancelOkexAlgoOrder(OkexCancelOrderRequest order)
+      throws IOException {
+    try {
+      return decorateApiCall(
+          () ->
+              okexAuthenticated.cancelOrder(
+                  exchange.getExchangeSpecification().getApiKey(),
+                  signatureCreator,
+                  DateUtils.toUTCISODateString(new Date()),
+                  (String)
+                      exchange
+                          .getExchangeSpecification()
+                          .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
+                  (String)
+                      exchange
+                          .getExchangeSpecification()
+                          .getExchangeSpecificParametersItem(PARAM_SIMULATED),
+                  order))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.cancelOrderPath))
+          .call();
+    } catch (OkexException e) {
+      throw handleError(e);
+    }
+  }
   /** <a href="https://www.okex.com/docs-v5/en/#rest-api-trade-cancel-multiple-orders">...</a> */
   public OkexResponse<List<OkexOrderResponse>> cancelOkexOrder(List<OkexCancelOrderRequest> orders)
       throws IOException {

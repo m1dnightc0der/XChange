@@ -137,6 +137,21 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
                 callBackRate,
                 null
         ).getOrderId();
+      } else if(order.hasFlag(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.AUTO_REPAY)||order.hasFlag(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.MARGIN_BUY)||order.hasFlag(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.NO_SIDE_EFFECT)){
+        orderId = Long.toString(newMarginOrder(
+
+            order.getInstrument(),
+            false,
+            BinanceAdapters.convert(order.getType()),
+            type,
+            tif,
+            order.getOriginalAmount(),
+            quoteOrderQty, // TODO (BigDecimal)order.getExtraValue("quoteOrderQty")
+            limitPrice,
+            getClientOrderId(order),
+            stopPrice,
+            null,
+            null, BinanceAdapters.convert(order.getOrderFlags())).orderId);
       } else {
         orderId = Long.toString(newOrder(
                 order.getInstrument(),
@@ -212,14 +227,25 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
         throw new ExchangeException(
             "You need to provide the currency pair and the order id to cancel an order.");
       }
-      assert params instanceof CancelOrderByInstrument;
-      CancelOrderByInstrument paramInstrument = (CancelOrderByInstrument) params;
-      CancelOrderByIdParams paramId = (CancelOrderByIdParams) params;
-      cancelOrderAllProducts(
-                paramInstrument.getInstrument(),
-                BinanceAdapters.id(paramId.getOrderId()),
+      String orderId;
+      Instrument instrument;
+      Boolean isMargin;
+      if(params instanceof BinanceCancelOrderParams){
+        BinanceCancelOrderParams binanceCancelOrderParams = (BinanceCancelOrderParams) params;
+        orderId=binanceCancelOrderParams.getOrderId();
+        instrument=binanceCancelOrderParams.getInstrument();
+        isMargin=binanceCancelOrderParams.getIsMarginOrder();
+
+      } else{
+        assert params instanceof CancelOrderByInstrument;
+        instrument = ((CancelOrderByInstrument) params).getInstrument();
+        orderId = ((CancelOrderByIdParams) params).getOrderId();
+        isMargin=false;
+      }
+      cancelOrderAllProducts(instrument,
+                BinanceAdapters.id(orderId),
                 null,
-                null);
+                null,isMargin);
 
       return true;
     } catch (BinanceException e) {
@@ -288,10 +314,12 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
   }
 
   @Override
-  public Collection<Order> getOrder(OrderQueryParams... params) throws IOException {
+  public Collection<Order>  getOrder(OrderQueryParams... params) throws IOException {
+    Collection<Order> orders = new ArrayList<>();
     try {
-      Collection<Order> orders = new ArrayList<>();
+
       for (OrderQueryParams param : params) {
+
         if (!(param instanceof OrderQueryParamInstrument)) {
           throw new ExchangeException(
                   "Parameters must be an instance of OrderQueryParamInstrument");
@@ -304,16 +332,32 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
                   "You need to provide the currency pair and the order id to query an order.");
         }
 
+        String orderId;
+        Instrument instrument;
+        Boolean isMargin;
+        if(orderQueryParamInstrument instanceof BinanceQueryOrderParams){
+          BinanceQueryOrderParams binanceOrderQueryParamInstrument = (BinanceQueryOrderParams) orderQueryParamInstrument;
+          orderId=binanceOrderQueryParamInstrument.getOrderId();
+          instrument=binanceOrderQueryParamInstrument.getInstrument();
+          isMargin =binanceOrderQueryParamInstrument.getIsMarginOrder();
+
+        } else{
+           orderId=orderQueryParamInstrument.getOrderId();
+          instrument=orderQueryParamInstrument.getInstrument();
+          isMargin=false;
+        }
         orders.add(
                 BinanceAdapters.adaptOrder(
                         orderStatusAllProducts(
-                                orderQueryParamInstrument.getInstrument(),
-                                BinanceAdapters.id(orderQueryParamInstrument.getOrderId()),
-                                null), orderQueryParamInstrument.getInstrument() instanceof FuturesContract));
+                            instrument,
+                                BinanceAdapters.id(orderId),
+                                null,isMargin), instrument instanceof FuturesContract));
       }
       return orders;
     } catch (BinanceException e) {
       throw BinanceErrorAdapter.adapt(e);
+    } finally {
+      return orders;
     }
   }
 

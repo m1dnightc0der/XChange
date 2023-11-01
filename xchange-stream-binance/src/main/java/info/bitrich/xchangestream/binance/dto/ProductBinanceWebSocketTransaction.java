@@ -1,6 +1,8 @@
 package info.bitrich.xchangestream.binance.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.knowm.xchange.binance.BinanceAdapters;
+import org.knowm.xchange.instrument.Instrument;
 
 public class ProductBinanceWebSocketTransaction extends BaseBinanceWebSocketTransaction {
 

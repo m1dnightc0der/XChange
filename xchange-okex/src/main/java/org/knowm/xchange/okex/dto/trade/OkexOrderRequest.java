@@ -39,4 +39,17 @@ public class OkexOrderRequest {
 
   @JsonProperty("reduceOnly")
   private boolean reducePosition;
+
+  @JsonProperty("slTriggerPx")
+  private String stopLossTriggerPrice;
+
+  @JsonProperty("slOrdPx")
+  private String stopLossLimitPrice;
+
+  @JsonProperty("tpTriggerPx")
+  private String takeProfitTriggerPrice;
+
+  @JsonProperty("tpOrdPx")
+  private String takeProfitLimitPrice;
+
 }

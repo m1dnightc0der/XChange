@@ -40,11 +40,15 @@ public interface OkexAuthenticated extends Okex {
   String positionsPath = "/account/positions"; // Stated as 10 req/2 sec
   String accountPositionAtRiskPath = "/account/account-position-risk"; // Stated as 10 req/2 sec
   String setLeveragePath = "/account/set-leverage"; // Stated as 20 req/2 sec
+
+  String getLeveragePath = "/account/leverage-info"; // Stated as 20 req/2 sec
   String pendingOrdersPath = "/trade/orders-pending"; // Stated as 20 req/2 sec
   String orderDetailsPath = "/trade/order";
   String placeOrderPath = "/trade/order"; // Stated as 60 req/2 sec
+  String placeAlgoOrderPath = "/trade/order-algo";
   String placeBatchOrderPath = "/trade/batch-orders"; // Stated as 300 req/2 sec
   String cancelOrderPath = "/trade/cancel-order"; // Stated as 60 req/2 sec
+  String cancelAlgoOrderPath="/trade/cancel-algos";
   String cancelBatchOrderPath = "/trade/cancel-batch-orders"; // Stated as 300 req/2 sec
   String amendOrderPath = "/trade/amend-order"; // Stated as 60 req/2 sec
   String amendBatchOrderPath = "trade/amend-batch-orders"; // Stated as 300 req/2 sec
@@ -66,6 +70,7 @@ public interface OkexAuthenticated extends Okex {
           put(pendingOrdersPath, Arrays.asList(20, 2));
           put(orderDetailsPath, Arrays.asList(60, 2));
           put(placeOrderPath, Arrays.asList(60, 2));
+          put(placeAlgoOrderPath, Arrays.asList(60, 2));
           put(placeBatchOrderPath, Arrays.asList(300, 2));
           put(cancelOrderPath, Arrays.asList(60, 2));
           put(cancelBatchOrderPath, Arrays.asList(300, 2));
@@ -80,6 +85,7 @@ public interface OkexAuthenticated extends Okex {
           put(subAccountList, Arrays.asList(2, 2));
           put(subAccountBalance, Arrays.asList(2, 2));
           put(piggyBalance, Arrays.asList(6, 1));
+          put(getLeveragePath, Arrays.asList(20, 2));
         }
       };
 
@@ -245,6 +251,20 @@ public interface OkexAuthenticated extends Okex {
           OkexSetLeverageRequest requestPayload)
           throws IOException, OkexException;
 
+
+
+
+  @GET
+  @Path(getLeveragePath)
+  OkexResponse<List<OkexSetLeverageResponse>> getLeverage(
+      @QueryParam("instId") String instrumentId,
+      @QueryParam("mgnMode") String marginMode,
+      @HeaderParam("OK-ACCESS-KEY") String apiKey,
+      @HeaderParam("OK-ACCESS-SIGN") ParamsDigest signature,
+      @HeaderParam("OK-ACCESS-TIMESTAMP") String timestamp,
+      @HeaderParam("OK-ACCESS-PASSPHRASE") String passphrase,
+      @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading);
+
   @GET
   @Path(pendingOrdersPath)
   OkexResponse<List<OkexOrderDetails>> getPendingOrders(
@@ -323,6 +343,18 @@ public interface OkexAuthenticated extends Okex {
       throws OkexException, IOException;
 
   @POST
+  @Path(placeAlgoOrderPath)
+  @Consumes(MediaType.APPLICATION_JSON)
+  OkexResponse<List<OkexOrderResponse>> placeAlgoOrder(
+      @HeaderParam("OK-ACCESS-KEY") String apiKey,
+      @HeaderParam("OK-ACCESS-SIGN") ParamsDigest signature,
+      @HeaderParam("OK-ACCESS-TIMESTAMP") String timestamp,
+      @HeaderParam("OK-ACCESS-PASSPHRASE") String passphrase,
+      @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading,
+      OkexOrderRequest requestPayload)
+      throws OkexException, IOException;
+
+  @POST
   @Path(placeBatchOrderPath)
   @Consumes(MediaType.APPLICATION_JSON)
   OkexResponse<List<OkexOrderResponse>> placeBatchOrder(
@@ -338,6 +370,18 @@ public interface OkexAuthenticated extends Okex {
   @Path(cancelOrderPath)
   @Consumes(MediaType.APPLICATION_JSON)
   OkexResponse<List<OkexOrderResponse>> cancelOrder(
+      @HeaderParam("OK-ACCESS-KEY") String apiKey,
+      @HeaderParam("OK-ACCESS-SIGN") ParamsDigest signature,
+      @HeaderParam("OK-ACCESS-TIMESTAMP") String timestamp,
+      @HeaderParam("OK-ACCESS-PASSPHRASE") String passphrase,
+      @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading,
+      OkexCancelOrderRequest requestPayload)
+      throws OkexException, IOException;
+
+  @POST
+  @Path(cancelAlgoOrderPath)
+  @Consumes(MediaType.APPLICATION_JSON)
+  OkexResponse<List<OkexOrderResponse>> cancelAlgoOrder(
       @HeaderParam("OK-ACCESS-KEY") String apiKey,
       @HeaderParam("OK-ACCESS-SIGN") ParamsDigest signature,
       @HeaderParam("OK-ACCESS-TIMESTAMP") String timestamp,

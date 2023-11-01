@@ -23,10 +23,7 @@ import org.knowm.xchange.binance.dto.marketdata.BinancePriceQuantity;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.BinanceExchangeInfo;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.Filter;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.Symbol;
-import org.knowm.xchange.binance.dto.trade.BinanceOrder;
-import org.knowm.xchange.binance.dto.trade.BinanceTrade;
-import org.knowm.xchange.binance.dto.trade.OrderSide;
-import org.knowm.xchange.binance.dto.trade.OrderStatus;
+import org.knowm.xchange.binance.dto.trade.*;
 import org.knowm.xchange.binance.service.BinanceTradeService.BinanceOrderFlags;
 import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
@@ -109,6 +106,20 @@ public class BinanceAdapters {
     }
   }
 
+
+  public static BinanceNewOrder.SideEffectType convert(Set<Order.IOrderFlags> orderFlags) {
+if(orderFlags.contains(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.MARGIN_BUY))
+        return BinanceNewOrder.SideEffectType.MARGIN_BUY;
+else if (orderFlags.contains(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.AUTO_REPAY))
+  return BinanceNewOrder.SideEffectType.AUTO_REPAY;
+else if (orderFlags.contains(org.knowm.xchange.binance.dto.trade.BinanceOrderFlags.NO_SIDE_EFFECT))
+  return BinanceNewOrder.SideEffectType.NO_SIDE_EFFECT;
+else
+        throw new RuntimeException("Not margin side effect type from order flags: " + orderFlags);
+
+  }
+
+
   public static CurrencyPair convert(String symbol) {
     // Iterate by base currency priority at binance.
     for (Currency base : Arrays.asList(Currency.BTC, Currency.ETH, Currency.BNB, Currency.USDT)) {
@@ -150,10 +161,17 @@ public class BinanceAdapters {
   }
 
   public static OrderType convertType(boolean isBuyer) {
-    return isBuyer ? OrderType.BID : OrderType.ASK;
+    return isBuyer ? OrderType.ASK : OrderType.BID;
+  }
+  public static Instrument adaptInstrument(Instrument instrument) {
+    if(instrument instanceof FuturesContract){
+      return((FuturesContract) instrument).getCurrencyPair();
+    } else
+      return instrument;
+
   }
 
-  public static Instrument adaptSymbol(String symbol, boolean isFuture) {
+  public static synchronized Instrument adaptSymbol(String symbol, boolean isFuture) {
     int pairLength = symbol.length();
     CurrencyPair currencyPair;
     if (symbol.endsWith("USDT")) {
@@ -174,7 +192,7 @@ public class BinanceAdapters {
     return (isFuture) ? new FuturesContract(currencyPair,"PERP") : currencyPair;
   }
 
-  public static OpenOrders adaptOpenOrders(List<BinanceOrder> binanceOrders, boolean isFuture){
+  public static synchronized OpenOrders adaptOpenOrders(List<BinanceOrder> binanceOrders, boolean isFuture){
     List<LimitOrder> limitOrders = new ArrayList<>();
     List<Order> otherOrders = new ArrayList<>();
     binanceOrders.forEach(
@@ -190,7 +208,7 @@ public class BinanceAdapters {
     return new OpenOrders(limitOrders, otherOrders);
   }
 
-  public static Order adaptOrder(BinanceOrder order, boolean isFuture) {
+  public static synchronized Order adaptOrder(BinanceOrder order, boolean isFuture) {
     OrderType type = convert(order.side);
     Instrument instrument = adaptSymbol(order.symbol, isFuture);
     Order.Builder builder;
@@ -208,9 +226,12 @@ public class BinanceAdapters {
         .id(Long.toString(order.orderId))
         .timestamp(order.getTime())
         .cumulativeAmount(order.executedQty);
-    if (order.executedQty.signum() != 0 && order.cummulativeQuoteQty.signum() != 0) {
+    if (!isFuture && (order.executedQty!=null && order.executedQty.signum() != 0) && (order.cummulativeQuoteQty!=null && order.cummulativeQuoteQty.signum() != 0)) {
       builder.averagePrice(
           order.cummulativeQuoteQty.divide(order.executedQty, MathContext.DECIMAL32));
+    } else if (isFuture && (order.avgPrice!=null && order.executedQty.signum() != 0) ) {
+      builder.averagePrice(order.avgPrice);
+
     }
     if (order.clientOrderId != null) {
       builder.flag(BinanceOrderFlags.withClientId(order.clientOrderId));
@@ -218,7 +239,7 @@ public class BinanceAdapters {
     return builder.build();
   }
 
-  private static Ticker adaptPriceQuantity(BinancePriceQuantity priceQuantity, boolean isFuture) {
+  private static synchronized Ticker adaptPriceQuantity(BinancePriceQuantity priceQuantity, boolean isFuture) {
     return new Ticker.Builder()
         .instrument(adaptSymbol(priceQuantity.symbol, isFuture))
         .ask(priceQuantity.askPrice)
@@ -228,13 +249,13 @@ public class BinanceAdapters {
         .build();
   }
 
-  public static List<Ticker> adaptPriceQuantities(List<BinancePriceQuantity> priceQuantities, boolean isFuture) {
+  public static synchronized List<Ticker> adaptPriceQuantities(List<BinancePriceQuantity> priceQuantities, boolean isFuture) {
     return priceQuantities.stream()
         .map(binancePriceQuantity -> adaptPriceQuantity(binancePriceQuantity, isFuture))
         .collect(Collectors.toList());
   }
 
-  static CurrencyMetaData adaptCurrencyMetaData(
+  static synchronized CurrencyMetaData adaptCurrencyMetaData(
       Map<Currency, CurrencyMetaData> currencies,
       Currency currency,
       Map<String, AssetDetail> assetDetailMap,
@@ -261,7 +282,7 @@ public class BinanceAdapters {
     return new CurrencyMetaData(precision, withdrawalFee, minWithdrawalAmount);
   }
 
-  private static WalletHealth getWalletHealth(boolean depositEnabled, boolean withdrawEnabled) {
+  private synchronized static WalletHealth getWalletHealth(boolean depositEnabled, boolean withdrawEnabled) {
     if (depositEnabled && withdrawEnabled) {
       return WalletHealth.ONLINE;
     }
@@ -274,7 +295,7 @@ public class BinanceAdapters {
     return WalletHealth.OFFLINE;
   }
 
-  public static org.knowm.xchange.binance.dto.trade.OrderType adaptOrderType(StopOrder order) {
+  public synchronized  static org.knowm.xchange.binance.dto.trade.OrderType adaptOrderType(StopOrder order) {
 
     if (order.getIntention() == null) {
       throw new IllegalArgumentException("Missing intention");
@@ -293,7 +314,7 @@ public class BinanceAdapters {
         throw new IllegalStateException("Unexpected value: " + order.getIntention());
     }
   }
-  public static Wallet adaptBinanceFutureWallet(BinanceFutureAccountInformation futureAccountInformation){
+  public synchronized  static Wallet adaptBinanceFutureWallet(BinanceFutureAccountInformation futureAccountInformation){
     BigDecimal totalPositionsInUsd = BigDecimal.ZERO;
 
     for (BinancePosition position : futureAccountInformation.getPositions()) {
@@ -312,7 +333,7 @@ public class BinanceAdapters {
             .features(Collections.singleton(Wallet.WalletFeature.FUTURES_TRADING))
             .build();
   }
-  public static Wallet adaptBinanceSpotWallet(BinanceAccountInformation binanceAccountInformation){
+  public synchronized static Wallet adaptBinanceSpotWallet(BinanceAccountInformation binanceAccountInformation){
 
     List<Balance> balances =
             binanceAccountInformation.balances.stream()
@@ -326,7 +347,7 @@ public class BinanceAdapters {
             .build();
   }
 
-  public static List<OpenPosition> adaptOpenPositions(List<BinancePosition> binancePositions) {
+  public synchronized static List<OpenPosition> adaptOpenPositions(List<BinancePosition> binancePositions) {
     List<OpenPosition> openPositions = new ArrayList<>();
 
     for (BinancePosition position : binancePositions) {
@@ -344,7 +365,7 @@ public class BinanceAdapters {
     return openPositions;
   }
 
-  public static UserTrades adaptUserTrades(List<BinanceTrade> binanceTrades, boolean isFuture) {
+  public synchronized static UserTrades adaptUserTrades(List<BinanceTrade> binanceTrades, boolean isFuture) {
     List<UserTrade> trades =
             binanceTrades.stream()
                     .map(
@@ -365,7 +386,7 @@ public class BinanceAdapters {
     return new UserTrades(trades, lastId, Trades.TradeSortType.SortByTimestamp);
   }
 
-  public static Trades adaptTrades(List<BinanceAggTrades> aggTrades, Instrument instrument) {
+  public synchronized static Trades adaptTrades(List<BinanceAggTrades> aggTrades, Instrument instrument) {
     List<Trade> trades =
             aggTrades.stream()
                     .map(
@@ -387,7 +408,7 @@ public class BinanceAdapters {
    * @param currencyPair
    * @return
    */
-  public static CandleStickData adaptBinanceCandleStickData(
+  public synchronized static CandleStickData adaptBinanceCandleStickData(
       List<BinanceKline> klines, CurrencyPair currencyPair) {
 
     CandleStickData candleStickData = null;
@@ -410,7 +431,7 @@ public class BinanceAdapters {
 
     return candleStickData;
   }
-  public static void adaptFutureExchangeMetaData(ExchangeMetaData exchangeMetaData, BinanceExchangeInfo binanceExchangeInfo){
+  public synchronized static void adaptFutureExchangeMetaData(ExchangeMetaData exchangeMetaData, BinanceExchangeInfo binanceExchangeInfo){
     Symbol[] futureSymbols = binanceExchangeInfo.getSymbols();
 
     for (Symbol futureSymbol : futureSymbols) {
@@ -461,7 +482,7 @@ public class BinanceAdapters {
       }
     }
   }
-  public static ExchangeMetaData adaptExchangeMetaData(BinanceExchangeInfo binanceExchangeInfo, Map<String, AssetDetail> assetDetailMap) {
+  public synchronized static ExchangeMetaData adaptExchangeMetaData(BinanceExchangeInfo binanceExchangeInfo, Map<String, AssetDetail> assetDetailMap) {
     // populate currency pair keys only, exchange does not provide any other metadata for download
     Map<Instrument, InstrumentMetaData> instruments = new HashMap<>();
     Map<Currency, CurrencyMetaData> currencies = new HashMap<>();
@@ -537,7 +558,7 @@ public class BinanceAdapters {
     return new BigDecimal(value).stripTrailingZeros().scale();
   }
 
-  public static FundingRates adaptFundingRates(List<BinanceFundingRate> binanceFundingRates) {
+  public synchronized static FundingRates adaptFundingRates(List<BinanceFundingRate> binanceFundingRates) {
     List<FundingRate> fundingRates = new ArrayList<>();
 
     binanceFundingRates
@@ -547,7 +568,7 @@ public class BinanceAdapters {
     return new FundingRates(fundingRates);
   }
 
-  public static FundingRate adaptFundingRate(BinanceFundingRate binanceFundingRate) {
+  public synchronized static FundingRate adaptFundingRate(BinanceFundingRate binanceFundingRate) {
     return new FundingRate.Builder()
             .fundingRate1h(binanceFundingRate.getLastFundingRate().divide(BigDecimal.valueOf(8), binanceFundingRate.getLastFundingRate().scale(), RoundingMode.HALF_EVEN))
             .fundingRate8h(binanceFundingRate.getLastFundingRate())
@@ -556,4 +577,6 @@ public class BinanceAdapters {
             .fundingRateEffectiveInMinutes(TimeUnit.MILLISECONDS.toMinutes(binanceFundingRate.getNextFundingTime().getTime()-binanceFundingRate.getTime().getTime()))
             .build();
   }
+
+
 }

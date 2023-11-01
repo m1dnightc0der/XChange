@@ -17,6 +17,7 @@ import javax.ws.rs.core.MediaType;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexResponse;
 import org.knowm.xchange.okex.dto.marketdata.*;
+import org.knowm.xchange.okex.dto.trade.OkexPriceLimit;
 
 @Path("/api/v5")
 @Produces(APPLICATION_JSON)
@@ -56,6 +57,15 @@ public interface Okex {
           @QueryParam("instId") String instrument,
           @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading)
           throws IOException, OkexException;
+
+
+  @GET
+  @Path("/public/price-limit")
+  OkexResponse<List<OkexPriceLimit>> getFuturesPriceLimits(
+      @QueryParam("instId") String instrument,
+      @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading)
+      throws IOException, OkexException;;
+
 
   @GET
   @Path("/market/books")

@@ -47,7 +47,7 @@ public class ExchangeSpecification {
   @Deprecated
   public ExchangeSpecification(String exchangeClassName) {
     this(exchangeClassForName(exchangeClassName));
-  }
+}
 
   /**
    * Static binding

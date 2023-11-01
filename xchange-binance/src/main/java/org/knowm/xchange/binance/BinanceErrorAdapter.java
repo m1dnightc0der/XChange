@@ -46,7 +46,8 @@ public final class BinanceErrorAdapter {
       case -1122:
         return new ExchangeSecurityException(message, e);
       default:
-        return new ExchangeException(message, e);
+        return
+            new ExchangeException(message, e);
     }
   }
 

@@ -15,8 +15,7 @@ import si.mazi.rescu.SynchronizedValueFactory;
 import java.io.IOException;
 import java.util.List;
 
-import static org.knowm.xchange.okex.OkexAdapters.SPOT;
-import static org.knowm.xchange.okex.OkexAdapters.SWAP;
+import static org.knowm.xchange.okex.OkexAdapters.*;
 
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
 public class OkexExchange extends BaseExchange {
@@ -112,6 +111,13 @@ public class OkexExchange extends BaseExchange {
                     .getData();
 
     instruments.addAll(swap_instruments);
+
+    List<OkexInstrument> futures_instruments =
+        ((OkexMarketDataServiceRaw) marketDataService)
+            .getOkexInstruments(FUTURES, null, null)
+            .getData();
+
+    instruments.addAll(futures_instruments);
 
     // Currency data and trade fee is only retrievable through a private endpoint
     List<OkexCurrency> currencies = null;
