@@ -25,14 +25,16 @@ package org.knowm.xchange.coinmate;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.FormParam;
-import javax.ws.rs.POST;
-import javax.ws.rs.Path;
-import javax.ws.rs.Produces;
-import javax.ws.rs.core.MediaType;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.FormParam;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
 import org.knowm.xchange.coinmate.dto.account.CoinmateBalance;
 import org.knowm.xchange.coinmate.dto.account.CoinmateDepositAddresses;
+import org.knowm.xchange.coinmate.dto.account.CoinmateTradingFeesResponse;
+import org.knowm.xchange.coinmate.dto.account.FeePriority;
 import org.knowm.xchange.coinmate.dto.trade.*;
 import si.mazi.rescu.ParamsDigest;
 import si.mazi.rescu.SynchronizedValueFactory;
@@ -51,6 +53,16 @@ public interface CoinmateAuthenticated extends Coinmate {
       @FormParam("clientId") String clientId,
       @FormParam("signature") ParamsDigest signer,
       @FormParam("nonce") SynchronizedValueFactory<Long> nonce)
+      throws IOException;
+
+  @POST
+  @Path("traderFees")
+  CoinmateTradingFeesResponse traderFees(
+      @FormParam("publicKey") String publicKey,
+      @FormParam("clientId") String clientId,
+      @FormParam("signature") ParamsDigest signer,
+      @FormParam("nonce") SynchronizedValueFactory<Long> nonce,
+      @FormParam("currencyPair") String currencyPair)
       throws IOException;
 
   // trade
@@ -260,7 +272,8 @@ public interface CoinmateAuthenticated extends Coinmate {
       @FormParam("signature") ParamsDigest signer,
       @FormParam("nonce") SynchronizedValueFactory<Long> nonce,
       @FormParam("amount") BigDecimal amount,
-      @FormParam("address") String address)
+      @FormParam("address") String address,
+      @FormParam("feePriority") FeePriority feePriority)
       throws IOException;
 
   @POST
@@ -441,6 +454,16 @@ public interface CoinmateAuthenticated extends Coinmate {
       @FormParam("timestampFrom") Long timestampFrom,
       @FormParam("timestampTo") Long timestampTo,
       @FormParam("currency") String currency)
+      throws IOException;
+
+  @POST
+  @Path("transfer")
+  CoinmateTransferDetail getTransferDetail(
+      @FormParam("publicKey") String publicKey,
+      @FormParam("clientId") String clientId,
+      @FormParam("signature") ParamsDigest signer,
+      @FormParam("nonce") SynchronizedValueFactory<Long> nonce,
+      @FormParam("transactionId") Long transactionId)
       throws IOException;
 
   @POST

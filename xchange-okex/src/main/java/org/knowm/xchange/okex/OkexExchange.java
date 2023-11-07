@@ -27,6 +27,8 @@ public class OkexExchange extends BaseExchange {
   public static final String PARAM_PASSPHRASE = "passphrase";
   private static ResilienceRegistries RESILIENCE_REGISTRIES;
 
+  public String accountLevel = "1";
+
   /** Adjust host parameters depending on exchange specific parameters */
   private static void concludeHostParams(ExchangeSpecification exchangeSpecification) {
     if (exchangeSpecification.getExchangeSpecificParameters() != null) {
@@ -126,7 +128,7 @@ public class OkexExchange extends BaseExchange {
         && exchangeSpecification.getSecretKey() != null
         && exchangeSpecification.getExchangeSpecificParametersItem("passphrase") != null) {
       currencies = ((OkexMarketDataServiceRaw) marketDataService).getOkexCurrencies().getData();
-      String accountLevel =
+      accountLevel =
               ((OkexAccountService) accountService).getOkexAccountConfiguration().getData().get(0).getAccountLevel();
       tradeFee = ((OkexAccountService) accountService).getTradeFee(
               SPOT, null, null, accountLevel).getData();

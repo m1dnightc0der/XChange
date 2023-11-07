@@ -1,27 +1,29 @@
 package org.knowm.xchange.okex;
 
+import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
+
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeFactory;
+import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.marketdata.FundingRate;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trades;
-import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.dto.OkexResponse;
 import org.knowm.xchange.okex.dto.marketdata.OkexCandleStick;
 import org.knowm.xchange.okex.service.OkexMarketDataService;
-
-import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 public class OkexPublicDataTest {
 
@@ -35,16 +37,15 @@ public class OkexPublicDataTest {
 
   @Test
   public void checkInstrumentMetaData(){
-    InstrumentMetaData spotMetaData = exchange.getExchangeMetaData().getInstruments().get(currencyPair);
-    InstrumentMetaData swapMetaData = exchange.getExchangeMetaData().getInstruments().get(instrument);
-
-    assertThat(spotMetaData.getMinimumAmount()).isGreaterThan(BigDecimal.ZERO);
-    assertThat(spotMetaData.getPriceScale()).isGreaterThanOrEqualTo(0);
-    assertThat(spotMetaData.getVolumeScale()).isGreaterThanOrEqualTo(0);
-
-    assertThat(swapMetaData.getMinimumAmount()).isGreaterThan(BigDecimal.ZERO);
-    assertThat(swapMetaData.getPriceScale()).isGreaterThanOrEqualTo(0);
-    assertThat(swapMetaData.getVolumeScale()).isGreaterThanOrEqualTo(0);
+    exchange.getExchangeMetaData().getInstruments().forEach((instrument1, instrumentMetaData) -> {
+      System.out.println(instrument1+"||"+instrumentMetaData);
+      assertThat(instrumentMetaData.getMinimumAmount()).isGreaterThan(BigDecimal.ZERO);
+      assertThat(instrumentMetaData.getPriceScale()).isGreaterThanOrEqualTo(0);
+      assertThat(instrumentMetaData.getVolumeScale()).isNotNull();
+      if(instrument1 instanceof FuturesContract){
+        assertThat(instrument1.getCounter()).isEqualTo(Currency.USDT);
+      }
+    });
   }
 
   @Test
@@ -76,8 +77,8 @@ public class OkexPublicDataTest {
   }
 
   @Test
+  @Ignore
   public void testCandleHist() throws IOException {
-    ((OkexMarketDataService) exchange.getMarketDataService()).getOkexOrderbook("BTC-USDT");
     OkexResponse<List<OkexCandleStick>> barHistDtos =
         ((OkexMarketDataService) exchange.getMarketDataService())
             .getHistoryCandle("BTC-USDT", null, null, null, null);

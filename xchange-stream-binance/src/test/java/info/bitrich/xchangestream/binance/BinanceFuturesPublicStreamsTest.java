@@ -24,8 +24,17 @@ public class BinanceFuturesPublicStreamsTest {
 
     @Before
     public void setup(){
-        exchange = StreamingExchangeFactory.INSTANCE.createExchange(BinanceFutureStreamingExchange.class);
-        exchange.connect(ProductSubscription.create().addOrderbook(instrument).addTicker(instrument).addFundingRates(instrument).addTrades(instrument).build()).blockingAwait();
+    exchange =
+        StreamingExchangeFactory.INSTANCE.createExchange(BinanceFutureStreamingExchange.class);
+    exchange
+        .connect(
+            ProductSubscription.create()
+                .addOrderbook(instrument)
+                .addTicker(instrument)
+                .addFundingRates(instrument)
+                .addTrades(instrument)
+                .build())
+        .blockingAwait();
         InstrumentMetaData instrumentMetaData = exchange.getExchangeMetaData().getInstruments().get(instrument);
         assertThat(instrumentMetaData.getVolumeScale()).isNotNull();
         assertThat(instrumentMetaData.getPriceScale()).isNotNull();
@@ -69,7 +78,7 @@ public class BinanceFuturesPublicStreamsTest {
         Disposable dis = exchange.getStreamingMarketDataService().getFundingRate(instrument)
                 .subscribe(fundingRate -> {
                     assertThat(fundingRate.getInstrument()).isEqualTo(instrument);
-                    System.out.println(fundingRate);
+//                    System.out.println(fundingRate);
                 });
 
         TimeUnit.SECONDS.sleep(3);

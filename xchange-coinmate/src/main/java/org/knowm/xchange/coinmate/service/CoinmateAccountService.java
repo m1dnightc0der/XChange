@@ -25,24 +25,37 @@ package org.knowm.xchange.coinmate.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.coinmate.CoinmateAdapters;
+import org.knowm.xchange.coinmate.CoinmateUtils;
 import org.knowm.xchange.coinmate.dto.account.CoinmateDepositAddresses;
+import org.knowm.xchange.coinmate.dto.account.CoinmateTradingFeesResponseData;
 import org.knowm.xchange.coinmate.dto.trade.CoinmateTradeResponse;
 import org.knowm.xchange.coinmate.dto.trade.CoinmateTransactionHistory;
+import org.knowm.xchange.coinmate.dto.trade.CoinmateTransferDetail;
 import org.knowm.xchange.coinmate.dto.trade.CoinmateTransferHistory;
 import org.knowm.xchange.currency.Currency;
+import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.account.AccountInfo;
+import org.knowm.xchange.dto.account.Fee;
 import org.knowm.xchange.dto.account.FundingRecord;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.account.AccountService;
 import org.knowm.xchange.service.trade.params.DefaultWithdrawFundsParams;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamLimit;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamOffset;
 import org.knowm.xchange.service.trade.params.TradeHistoryParams;
+import org.knowm.xchange.service.trade.params.TradeHistoryParamsIdSpan;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsSorted;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsTimeSpan;
 import org.knowm.xchange.service.trade.params.WithdrawFundsParams;
+
+import static org.apache.commons.lang3.math.NumberUtils.toLong;
 
 /** @author Martin Stachon */
 public class CoinmateAccountService extends CoinmateAccountServiceRaw implements AccountService {
@@ -56,6 +69,18 @@ public class CoinmateAccountService extends CoinmateAccountServiceRaw implements
   @Override
   public AccountInfo getAccountInfo() throws IOException {
     return new AccountInfo(CoinmateAdapters.adaptWallet(getCoinmateBalance()));
+  }
+
+  @Override
+  public Map<Instrument, Fee> getDynamicTradingFeesByInstrument() throws IOException {
+    Set<Instrument> instruments = exchange.getExchangeMetaData().getInstruments().keySet();
+    HashMap<Instrument, Fee> result = new HashMap<>();
+    for (Instrument instrument: instruments) {
+      CoinmateTradingFeesResponseData data = getCoinmateTraderFees(CoinmateUtils.getPair(instrument));
+      Fee fee = new Fee(data.getMaker(), data.getTaker());
+      result.put(instrument, fee);
+    }
+    return result;
   }
 
   @Override
@@ -138,6 +163,14 @@ public class CoinmateAccountService extends CoinmateAccountServiceRaw implements
     int offset = 0;
     Long timestampFrom = null;
     Long timestampTo = null;
+
+    if (params instanceof TradeHistoryParamsIdSpan) {
+      String transactionId = ((TradeHistoryParamsIdSpan) params).getStartId();
+      if (transactionId != null) {
+        CoinmateTransferDetail coinmateTransferDetail = getCoinmateTransferDetail(toLong(transactionId));
+        return CoinmateAdapters.adaptFundingDetail(coinmateTransferDetail);
+      }
+    }
 
     if (params instanceof TradeHistoryParamOffset) {
       offset = Math.toIntExact(((TradeHistoryParamOffset) params).getOffset());
