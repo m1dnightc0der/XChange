@@ -280,7 +280,11 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
         .call();
   }
 
-  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId)
+  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId) throws IOException, BinanceException {
+   return orderStatusAllProducts( pair,  orderId,  origClientOrderId, false);
+  }
+
+  public BinanceOrder orderStatusAllProducts(Instrument pair, Long orderId, String origClientOrderId, Boolean isMarginOrder)
       throws IOException, BinanceException {
     if (exchange.isPortfolioMarginEnabled()) {
 
@@ -289,7 +293,16 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
               binanceFutures.futurePortfolioMarginInverseOrderStatus(BinanceAdapters.toInverseSymbol(pair), orderId, origClientOrderId, getRecvWindow(),
                   getTimestampFactory(), super.apiKey, super.signatureCreator) :
               binanceFutures.futurePortfolioMarginOrderStatus(BinanceAdapters.toSymbol(pair), orderId, origClientOrderId, getRecvWindow(),
-                  getTimestampFactory(), super.apiKey, super.signatureCreator)) :
+                  getTimestampFactory(), super.apiKey, super.signatureCreator)) : isMarginOrder ?
+              binance.marginPortfolioMarginOrderStatus(
+
+                  BinanceAdapters.toSymbol(pair),
+                  orderId,
+                  origClientOrderId,
+                  getRecvWindow(),
+                  getTimestampFactory(),
+                  super.apiKey,
+                  super.signatureCreator) :
           binance.orderStatus(BinanceAdapters.toSymbol(pair), orderId, origClientOrderId, getRecvWindow(), getTimestampFactory(), super.apiKey, super.signatureCreator)).withRetry(retry("orderStatus")).withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER)).call();
     } else {
       return decorateApiCall(() -> (pair instanceof FuturesContract) ?
@@ -303,8 +316,13 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
     }
   }
 
+  public BinanceCancelledOrder cancelOrderAllProducts(Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
+      throws IOException, BinanceException {
+    return cancelOrderAllProducts(pair,  orderId,  origClientOrderId,  newClientOrderId,false);
+  }
+
   public BinanceCancelledOrder cancelOrderAllProducts(
-      Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
+      Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId,  Boolean isMarginOrder)
       throws IOException, BinanceException {
     if(exchange.isPortfolioMarginEnabled()) {
 

@@ -209,6 +209,33 @@ public interface BinanceAuthenticated extends Binance {
    * Either orderId or origClientOrderId must be sent.
    *
    * @param symbol
+   * @param orderId optional
+   * @param origClientOrderId optional
+   * @param recvWindow optional
+   * @param timestamp
+   * @param apiKey
+   * @param signature
+   * @return
+   * @throws IOException
+   * @throws BinanceException
+   */
+  @GET
+  @Path("papi/v1/margin/order")
+  BinanceOrder marginPortfolioMarginOrderStatus(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("orderId") long orderId,
+      @QueryParam("origClientOrderId") String origClientOrderId,
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
+  /**
+   * Check a margin order's status.<br>
+   * Either orderId or origClientOrderId must be sent.
+   *
+   * @param symbol
    * @param isIsolated optional
    * @param orderId optional
    * @param origClientOrderId optional

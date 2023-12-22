@@ -15,9 +15,12 @@ public class BookTickerBinanceWebSocketTransaction extends BaseBinanceWebSocketT
       @JsonProperty("b") BigDecimal bidPrice,
       @JsonProperty("B") BigDecimal bidQty,
       @JsonProperty("a") BigDecimal askPrice,
-      @JsonProperty("A") BigDecimal askQty) {
+      @JsonProperty("A") BigDecimal askQty,
+      @JsonProperty("E") Long timestamp
+
+  ) {
     super(BinanceWebSocketTypes.BOOK_TICKER, new Date());
-    ticker = new BinanceBookTicker(bidPrice, bidQty, askPrice, askQty, symbol);
+    ticker = new BinanceBookTicker(bidPrice, bidQty, askPrice, askQty, symbol,timestamp);
     ticker.setUpdateId(updateId);
   }
 

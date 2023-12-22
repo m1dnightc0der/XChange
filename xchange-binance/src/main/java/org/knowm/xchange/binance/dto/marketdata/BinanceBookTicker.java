@@ -2,6 +2,7 @@ package org.knowm.xchange.binance.dto.marketdata;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
+import java.util.Date;
 
 import lombok.Getter;
 import org.knowm.xchange.binance.BinanceAdapters;
@@ -15,7 +16,7 @@ public final class BinanceBookTicker {
   private final BigDecimal askPrice;
   private final BigDecimal askQty;
   private final String symbol;
-
+  private final Long timestamp;
   // The cached ticker
   private Ticker ticker;
 
@@ -24,12 +25,15 @@ public final class BinanceBookTicker {
       @JsonProperty("bidQty") BigDecimal bidQty,
       @JsonProperty("askPrice") BigDecimal askPrice,
       @JsonProperty("askQty") BigDecimal askQty,
-      @JsonProperty("symbol") String symbol) {
+      @JsonProperty("symbol") String symbol,
+      @JsonProperty("timestamp") Long timestamp
+      ) {
     this.bidPrice = bidPrice;
     this.bidQty = bidQty;
     this.askPrice = askPrice;
     this.askQty = askQty;
     this.symbol = symbol;
+    this.timestamp=timestamp;
   }
 
   public void setUpdateId(long updateId) {
@@ -45,6 +49,7 @@ public final class BinanceBookTicker {
               .bid(bidPrice)
               .askSize(askQty)
               .bidSize(bidQty)
+              .timestamp(new Date(timestamp))
               .build();
     }
     return ticker;

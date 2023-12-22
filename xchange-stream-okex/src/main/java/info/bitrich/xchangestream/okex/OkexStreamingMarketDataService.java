@@ -77,7 +77,7 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
     @Override
     public Observable<OrderBook> getOrderBook(Instrument instrument, Object... args) {
         String instId = OkexAdapters.adaptInstrument(instrument);
-        String channelName = args.length >= 1 ? args[0].toString() : "books";
+        String channelName = args.length >= 1 ? args[0].toString() : "books-l2-tbt";
         String channelUniqueId = ORDERBOOK+instId;
 
         return service

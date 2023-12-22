@@ -19,7 +19,7 @@ public class BinanceExchange extends BaseExchange implements Exchange {
   public static final String SPECIFIC_PARAM_FUTURES_ENABLED = "Futures_Enabled";
   public static final String SPECIFIC_PARAM_PORTFOLIO_MARGIN_ENABLED = "Portfolio_Margin_Enabled";
   private static final String SPOT_URL = "https://api.binance.com";
-  public static final String FUTURES_URL = "https://dapi.binance.com";
+  public static final String FUTURES_URL = "https://fapi.binance.com";
   public static final String INVERSE_FUTURES_URL = "https://dapi.binance.com";
   public static final String PORTFOLIO_MARGIN_URL = "https://papi.binance.com";
 

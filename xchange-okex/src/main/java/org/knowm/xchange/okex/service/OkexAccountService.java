@@ -51,9 +51,9 @@ public class OkexAccountService extends OkexAccountServiceRaw implements Account
 
     } else if (instrument instanceof CurrencyPair) {
  if(positionSide== null || (positionSide!= null && !positionSide.equals("short"))) {
-        return setLeverage("", instrument.getBase().getCurrencyCode(), leverage.toString(), marginMode, positionSide);
+        return setLeverage("", instrument.getCounter().getCurrencyCode(), leverage.toString(), marginMode, "");
       } else {
- return setLeverage("", instrument.getCounter().getCurrencyCode(), leverage.toString(),  marginMode,  positionSide);
+ return setLeverage("", instrument.getBase().getCurrencyCode(), leverage.toString(),  marginMode,  "");
  }
     } else {
       return null;
