@@ -110,9 +110,10 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
   }
 
   private <T extends IOrderFlags> Optional<T> getOrderFlag(Order order, Class<T> clazz) {
-    return (Optional<T>) order.getOrderFlags().stream()
-        .filter(flag -> clazz.isAssignableFrom(flag.getClass()))
-        .findFirst();
+    return (Optional<T>)
+        order.getOrderFlags().stream()
+            .filter(flag -> clazz.isAssignableFrom(flag.getClass()))
+            .findFirst();
   }
 
   private String placeOrderAllProducts(
@@ -285,9 +286,9 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
   }
 
   @Override
-  public Collection<Order>  getOrder(OrderQueryParams... params) throws IOException {
+  public Collection<Order> getOrder(OrderQueryParams... params) throws IOException {
     try {
-    Collection<Order> orders = new ArrayList<>();
+      Collection<Order> orders = new ArrayList<>();
       for (OrderQueryParams param : params) {
         if (!(param instanceof OrderQueryParamInstrument)) {
           throw new ExchangeException(

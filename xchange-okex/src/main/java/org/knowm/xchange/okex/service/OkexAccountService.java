@@ -1,11 +1,7 @@
 package org.knowm.xchange.okex.service;
 
 import org.knowm.xchange.client.ResilienceRegistries;
-import org.knowm.xchange.currency.CurrencyPair;
-import org.knowm.xchange.derivative.FuturesContract;
-import org.knowm.xchange.derivative.OptionsContract;
 import org.knowm.xchange.dto.account.AccountInfo;
-import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
 import org.knowm.xchange.okex.OkexExchange;
 import org.knowm.xchange.okex.dto.OkexException;
@@ -36,8 +32,7 @@ public class OkexAccountService extends OkexAccountServiceRaw implements Account
     return new AccountInfo(
         OkexAdapters.adaptOkexBalances(tradingBalances.getData()),
         OkexAdapters.adaptOkexAssetBalances(assetBalances.getData()),
-        OkexAdapters.adaptOkexAccountPositionRisk(positionRis.getData())
-    );
+        OkexAdapters.adaptOkexAccountPositionRisk(positionRis.getData()));
   }
 
 
@@ -72,16 +67,21 @@ public class OkexAccountService extends OkexAccountServiceRaw implements Account
   public String withdrawFunds(WithdrawFundsParams params) throws IOException {
     if (params instanceof DefaultWithdrawFundsParams) {
       DefaultWithdrawFundsParams defaultParams = (DefaultWithdrawFundsParams) params;
-      String address = defaultParams.getAddressTag() != null ? defaultParams.getAddress() + ":" + defaultParams.getAddressTag() : defaultParams.getAddress();
-      OkexResponse<List<OkexWithdrawalResponse>> okexResponse = assetWithdrawal(
+      String address =
+          defaultParams.getAddressTag() != null
+              ? defaultParams.getAddress() + ":" + defaultParams.getAddressTag()
+              : defaultParams.getAddress();
+      OkexResponse<List<OkexWithdrawalResponse>> okexResponse =
+          assetWithdrawal(
               defaultParams.getCurrency().getCurrencyCode(),
               defaultParams.getAmount().toPlainString(),
               ON_CHAIN_METHOD,
               address,
-              defaultParams.getCommission() != null ? defaultParams.getCommission().toPlainString() : null,
+              defaultParams.getCommission() != null
+                  ? defaultParams.getCommission().toPlainString()
+                  : null,
               null,
-              null
-      );
+              null);
       if (!okexResponse.isSuccess())
         throw new OkexException(okexResponse.getMsg(), Integer.parseInt(okexResponse.getCode()));
 
