@@ -3,10 +3,17 @@ package org.knowm.xchange.bybit.service;
 import static org.knowm.xchange.bybit.BybitAdapters.createBybitExceptionFromResult;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.dto.BybitCategory;
+import org.knowm.xchange.bybit.dto.trade.BybitAmendOrderPayload;
+import org.knowm.xchange.bybit.dto.trade.BybitPlaceOrderPayload;
 import org.knowm.xchange.bybit.dto.BybitResult;
-import org.knowm.xchange.bybit.dto.trade.BybitOrderDetails;
-import org.knowm.xchange.bybit.dto.trade.BybitOrderRequest;
+import org.knowm.xchange.bybit.dto.trade.BybitOrderResponse;
+import org.knowm.xchange.bybit.dto.trade.BybitOrderType;
+import org.knowm.xchange.bybit.dto.trade.BybitSide;
+import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetail;
+import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetails;
 
 public class BybitTradeServiceRaw extends BybitBaseService {
 
@@ -14,23 +21,71 @@ public class BybitTradeServiceRaw extends BybitBaseService {
     super(exchange);
   }
 
-  public BybitResult<BybitOrderDetails> getBybitOrder(String orderId) throws IOException {
-    BybitResult<BybitOrderDetails> order =
-        bybitAuthenticated.getOrder(apiKey, orderId, nonceFactory, signatureCreator);
+  public BybitResult<BybitOrderDetails<BybitOrderDetail>> getBybitOrder(
+      BybitCategory category, String orderId) throws IOException {
+    BybitResult<BybitOrderDetails<BybitOrderDetail>> order =
+        bybitAuthenticated.getOpenOrders(
+            apiKey, signatureCreator, nonceFactory, category.getValue(), orderId);
     if (!order.isSuccess()) {
       throw createBybitExceptionFromResult(order);
     }
     return order;
   }
 
-  public BybitResult<BybitOrderRequest> placeOrder(
-      String symbol, long qty, String side, String type) throws IOException {
-    BybitResult<BybitOrderRequest> placeOrder =
-        bybitAuthenticated.placeOrder(
-            apiKey, symbol, qty, side, type, nonceFactory, signatureCreator);
+  public BybitResult<BybitOrderResponse> placeMarketOrder(
+      BybitCategory category, String symbol, BybitSide side, BigDecimal qty, String orderLinkId)
+      throws IOException {
+    BybitPlaceOrderPayload payload = new BybitPlaceOrderPayload(category.getValue(),
+        symbol, side.getValue(), BybitOrderType.MARKET.getValue(), qty, orderLinkId);
+    BybitResult<BybitOrderResponse> placeOrder =
+        bybitAuthenticated.placeMarketOrder(
+            apiKey,
+            signatureCreator,
+            nonceFactory,
+            payload);
     if (!placeOrder.isSuccess()) {
       throw createBybitExceptionFromResult(placeOrder);
     }
     return placeOrder;
   }
+
+  public BybitResult<BybitOrderResponse> placeLimitOrder(
+      BybitCategory category, String symbol, BybitSide side, BigDecimal qty, BigDecimal limitPrice,
+      String orderLinkId)
+      throws IOException {
+    BybitPlaceOrderPayload payload = new BybitPlaceOrderPayload(category.getValue(),
+        symbol, side.getValue(), BybitOrderType.LIMIT.getValue(), qty, orderLinkId, limitPrice);
+    BybitResult<BybitOrderResponse> placeOrder =
+        bybitAuthenticated.placeLimitOrder(
+            apiKey,
+            signatureCreator,
+            nonceFactory,
+            payload);
+    if (!placeOrder.isSuccess()) {
+      throw createBybitExceptionFromResult(placeOrder);
+    }
+    return placeOrder;
+  }
+
+  public BybitResult<BybitOrderResponse> amendOrder(BybitCategory category, String symbol, String orderId,
+      String orderLinkId, String triggerPrice, String qty, String price, String tpslMode, String takeProfit,
+      String stopLoss, String tpTriggerBy,String slTriggerBy,String triggerBy,String tpLimitPrice,
+  String slLimitPrice) throws IOException {
+    //if only userId is used, don't need to send id
+    if(orderId!= null && orderId.isEmpty())
+      orderId = null;
+    BybitAmendOrderPayload payload = new BybitAmendOrderPayload(category, symbol,orderId,orderLinkId,triggerPrice,qty,price,
+    tpslMode, takeProfit, stopLoss, tpTriggerBy, slTriggerBy, triggerBy, tpLimitPrice, slLimitPrice);
+    BybitResult<BybitOrderResponse> amendOrder =
+    bybitAuthenticated.amendOrder(
+        apiKey,
+        signatureCreator,
+        nonceFactory,
+        payload);
+    if (!amendOrder.isSuccess()) {
+      throw createBybitExceptionFromResult(amendOrder);
+    }
+    return amendOrder;
+  }
+
 }

@@ -1,19 +1,17 @@
 package info.bitrich.xchangestream.binance;
 
+import static org.knowm.xchange.binance.BinanceExchange.EXCHANGE_TYPE;
+import static org.knowm.xchange.binance.dto.ExchangeType.FUTURES;
+
 import info.bitrich.xchangestream.binancefuture.BinanceFutureStreamingExchange;
 import info.bitrich.xchangestream.core.ProductSubscription;
 import info.bitrich.xchangestream.core.StreamingExchangeFactory;
-import io.reactivex.Single;
-import io.reactivex.disposables.Disposable;
+import io.reactivex.rxjava3.disposables.Disposable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-
 import org.knowm.xchange.ExchangeSpecification;
-import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
-import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.instrument.Instrument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +30,7 @@ public class BinanceLiveFutureSubscriptionExample {
         StreamingExchangeFactory.INSTANCE
             .createExchange(BinanceFutureStreamingExchange.class)
             .getDefaultExchangeSpecification();
+    spec.setExchangeSpecificParametersItem(EXCHANGE_TYPE, FUTURES);
     BinanceFutureStreamingExchange exchange =
         (BinanceFutureStreamingExchange) StreamingExchangeFactory.INSTANCE.createExchange(spec);
 
@@ -44,7 +43,7 @@ public class BinanceLiveFutureSubscriptionExample {
 
     // Note: See the doOnDispose below. It's here that we will send an unsubscribe request to
     // Binance through the websocket instance.
-/*    Disposable tradesBtc =
+    Disposable tradesBtc =
         exchange
             .getStreamingMarketDataService()
             .getTrades(instrumentBTC)
@@ -53,35 +52,7 @@ public class BinanceLiveFutureSubscriptionExample {
                     exchange
                         .getStreamingMarketDataService()
                         .unsubscribe(instrumentBTC, BinanceSubscriptionType.TRADE))
-            .subscribe(trade -> LOG.info("Trade: {}", trade));*/
-
-
-    exchange.getStreamingMarketDataService().getOrderBook(instrumentBTC)
-        .retryWhen(errors -> {
-          return errors.map(error -> 1)
-              // Count the number of errors.
-              .scan(Math::addExact).doOnNext(
-                  errorCount -> LOG.error("XchangeData:createBookSubscription - book subscription error for market {}. Error count={}",
-                      instrumentBTC,errorCount))
-
-              // Signal resubscribe event after some delay.
-              .flatMapSingle(errorCount -> Single.timer(1, TimeUnit.SECONDS));
-        })
-        //.timeout(60, TimeUnit.SECONDS).retryWhen(attempts -> {
-        //  return attempts.zipWith(Observable.range(1, 3), (n, i) -> i).flatMap(i -> {
-        //    log.error("XchangeData:createBookSubscription - At {} for {} delay retry by {} second(s)", context.getTime(), cointraderMarket, i);
-        //    return Observable.timer(i, TimeUnit.SECONDS);
-        //  });
-        //      })
-       // .doOnError( error -> connectAndSubscribe( coinTraderExchange, false,true))
-        //.sample(50, TimeUnit.MILLISECONDS)
-
-        //.throttleLatest(100, TimeUnit.MILLISECONDS,true)
-        .throttleWithTimeout( 100, TimeUnit.MILLISECONDS)
-        .subscribe(orderBook ->LOG.info("Order book: {}", orderBook.getAsks().get(0)),
-            error -> LOG.error("Order book error"));
-
-
+            .subscribe(trade -> LOG.info("Trade: {}", trade));
 
     Disposable orderBooksBtc =
         exchange
@@ -94,7 +65,7 @@ public class BinanceLiveFutureSubscriptionExample {
                         .unsubscribe(instrumentBTC, BinanceSubscriptionType.DEPTH))
             .subscribe(orderBook -> LOG.info("Order book: {}", orderBook.getAsks().get(0)));
 
-    Thread.sleep(50000000);
+    Thread.sleep(5000);
 
     // Now we enable the live subscription/unsubscription to add new currencies to the streams
     LOG.info("Enable live subscription/unsubscription");
@@ -135,7 +106,7 @@ public class BinanceLiveFutureSubscriptionExample {
     // pairs (TRADE 3x)
     // Note: we are ok with live unsubscription because we not bypass the limit of 5 messages per
     // second.
-    //tradesBtc.dispose();
+    tradesBtc.dispose();
     orderBooksBtc.dispose();
     disposableTrades.forEach(Disposable::dispose);
 
