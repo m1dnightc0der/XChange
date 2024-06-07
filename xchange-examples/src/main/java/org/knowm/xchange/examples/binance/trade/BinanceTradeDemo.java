@@ -8,7 +8,6 @@ import java.util.List;
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.binance.BinanceExchange;
 import org.knowm.xchange.binance.dto.trade.BinanceCancelOrderParams;
-import org.knowm.xchange.binance.dto.trade.BinanceOpenOrderParams;
 import org.knowm.xchange.binance.dto.trade.BinanceOrderFlags;
 import org.knowm.xchange.binance.dto.trade.BinanceQueryOrderParams;
 import org.knowm.xchange.binance.service.BinanceTradeService;
@@ -50,7 +49,7 @@ public class BinanceTradeDemo {
 
   }
 
-  public static void genericpm(Exchange exchange) throws IOException {
+  /*public static void genericpm(Exchange exchange) throws IOException {
 
     //FuturesContract contract = new FuturesContract(CurrencyPair.BTC_USD, "PERP");
     CurrencyPair contract;
@@ -70,8 +69,15 @@ public class BinanceTradeDemo {
     String limitOrderReturnValue = tradeService.placeLimitOrder(limitOrder);
     System.out.println("Limit Order return value: " + limitOrderReturnValue);
     // Get open orders
-    OpenOrdersParamInstrument queryOrdersParams = new BinanceOpenOrderParams(contract, true);
-    OpenOrders orders = tradeService.getOpenOrders(queryOrdersParams);
+    Class queryParamClass = exchange.getTradeService().getRequiredOrderQueryParamClass();
+    OrderQueryParams queryParams = new DefaultQueryOrderParam(limitOrder.getId());
+    if (queryParamClass == OrderQueryParamCurrencyPair.class) {
+      queryParams = new DefaultQueryOrderParamCurrencyPair(pair, limitOrder.getId());
+    } else if (queryParamClass == OrderQueryParamInstrument.class) {
+      Instrument pairAsInstrument = pair;
+      queryParams = new DefaultQueryOrderParamInstrument(pairAsInstrument, limitOrder.getId());
+    }
+      OpenOrders orders = tradeService.getOpenOrders(queryParams);
         LimitOrder order = orders.getOpenOrders().stream().collect(StreamUtils.singletonCollector());
      if (order != null) {
       System.out.println(order);
@@ -109,7 +115,7 @@ public class BinanceTradeDemo {
 
       exchange.getTradeService().cancelOrder(cancelParam);
     }
-  }
+  }*/
 
   public static void generic(Exchange exchange) throws IOException {
 

@@ -30,6 +30,15 @@ public class BinanceAccountServiceRaw extends BinanceBaseService {
         .call();
   }
 
+  public List<AssetPortfolioMarginBalance> portfolioMarginBalances() throws BinanceException, IOException {
+
+    return decorateApiCall(
+        () -> binancepm.portfolioMarginBalance(getRecvWindow(), getTimestampFactory(), apiKey, signatureCreator))
+        .withRetry(retry("account"))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), 5)
+        .call();
+  }
+
   public BinanceFutureAccountInformation futuresAccount() throws BinanceException, IOException {
     return decorateApiCall(
             () ->
@@ -195,4 +204,39 @@ public class BinanceAccountServiceRaw extends BinanceBaseService {
         .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER))
         .call();
   }
+
+
+
+  PortfolioMarginRepaymentResponse portfolioMarginRepayment(String coin, BigDecimal amount)
+      throws IOException, BinanceException {
+    return decorateApiCall(
+        () ->
+            binancepm.portfolioMarginRepayment(
+                coin,
+                amount,
+                getRecvWindow(),
+                getTimestampFactory(),
+                apiKey,
+                signatureCreator))
+        .withRetry(retry("withdraw", NON_IDEMPOTENT_CALLS_RETRY_CONFIG_NAME))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), 5)
+        .call();
+  }
+
+  PortfolioMarginBorrowResponse portfolioMarginBorrow(String coin, BigDecimal amount)
+      throws IOException, BinanceException {
+    return decorateApiCall(
+        () ->
+            binancepm.portfolioMarginBorrow(
+                coin,
+                amount,
+                getRecvWindow(),
+                getTimestampFactory(),
+                apiKey,
+                signatureCreator))
+        .withRetry(retry("withdraw", NON_IDEMPOTENT_CALLS_RETRY_CONFIG_NAME))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), 5)
+        .call();
+  }
+
 }

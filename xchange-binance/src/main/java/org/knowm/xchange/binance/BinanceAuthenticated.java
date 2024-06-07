@@ -406,6 +406,26 @@ public interface BinanceAuthenticated extends Binance {
       @QueryParam(SIGNATURE) ParamsDigest signature)
       throws IOException, BinanceException;
 
+
+  /**
+   * Get current portfolio margin account information.
+   *
+   * @param recvWindow optional
+   * @param timestamp
+   * @return
+   * @throws IOException
+   * @throws BinanceException
+   */
+  @GET
+  @Path("papi/v1/balance")
+  List<AssetPortfolioMarginBalance> portfolioMarginBalance(
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
+
   /**
    * Get trades for a specific account and symbol.
    *
@@ -685,4 +705,52 @@ public interface BinanceAuthenticated extends Binance {
   Map<?, ?> closeUserDataStream(
       @HeaderParam(X_MBX_APIKEY) String apiKey, @PathParam("listenKey") String listenKey)
       throws IOException, BinanceException;
+
+  /**
+   * Submit a portfolio margin repayment request.
+   *
+   * @param coin
+   * @param amount
+   * @param recvWindow optional
+   * @param timestamp
+   * @param apiKey
+   * @param signature
+   * @return
+   * @throws IOException
+   * @throws BinanceException
+   */
+  @POST
+  @Path("/papi/v1/repayLoan")
+  PortfolioMarginRepaymentResponse portfolioMarginRepayment(
+      @FormParam("asset") String coin,
+      @FormParam("amount") BigDecimal amount,
+      @FormParam("recvWindow") Long recvWindow,
+      @FormParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+  /**
+   * Submit a portfolio margin borrow request.
+   *
+   * @param coin
+   * @param amount
+   * @param recvWindow optional
+   * @param timestamp
+   * @param apiKey
+   * @param signature
+   * @return
+   * @throws IOException
+   * @throws BinanceException
+   */
+  @POST
+  @Path("/papi/v1/marginLoan")
+  PortfolioMarginBorrowResponse portfolioMarginBorrow(
+      @FormParam("asset") String coin,
+      @FormParam("amount") BigDecimal amount,
+      @FormParam("recvWindow") Long recvWindow,
+      @FormParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
 }

@@ -23,6 +23,7 @@ public class BinanceBaseService extends BaseResilientExchangeService<BinanceExch
 
   protected final String apiKey;
   protected final BinanceAuthenticated binance;
+  protected final BinanceAuthenticated binancepm;
   protected final BinanceFuturesAuthenticated binanceFutures;
   protected final BinanceFuturesAuthenticated inverseBinanceFutures;
   protected final ParamsDigest signatureCreator;
@@ -31,10 +32,23 @@ public class BinanceBaseService extends BaseResilientExchangeService<BinanceExch
       BinanceExchange exchange, ResilienceRegistries resilienceRegistries) {
 
     super(exchange, resilienceRegistries);
+    ExchangeSpecification spotSpec = exchange.getExchangeSpecification();
     this.binance =
         ExchangeRestProxyBuilder.forInterface(
-                BinanceAuthenticated.class, exchange.getExchangeSpecification())
+                BinanceAuthenticated.class, spotSpec)
             .build();
+
+    if(exchange.isPortfolioMarginEnabled()){
+      ExchangeSpecification pmSpec = exchange.getExchangeSpecification();
+      pmSpec.setSslUri( BinanceExchange.PORTFOLIO_MARGIN_URL);
+      this.binancepm =
+          ExchangeRestProxyBuilder.forInterface(
+                  BinanceAuthenticated.class, pmSpec)
+              .build();
+
+    } else {
+      this.binancepm =null;
+    }
     ExchangeSpecification futuresSpec = exchange.getDefaultExchangeSpecification();
 
     futuresSpec.setSslUri((exchange.usingSandbox()) ? BinanceExchange.SANDBOX_FUTURES_URL: (exchange.isPortfolioMarginEnabled()) ? BinanceExchange.PORTFOLIO_MARGIN_URL : BinanceExchange.FUTURES_URL);

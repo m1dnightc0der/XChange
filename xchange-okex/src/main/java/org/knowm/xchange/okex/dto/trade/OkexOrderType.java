@@ -5,7 +5,7 @@ public enum OkexOrderType {
     limit,
     post_only,
     fok,
-    iok,
+    ioc,
     optimal_limit_ioc,
     conditional
 }

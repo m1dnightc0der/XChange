@@ -291,9 +291,14 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
   }
 
   private String getChannelPrefix(Instrument instrument) {
-    return (instrument instanceof FuturesContract)
-        ? ((FuturesContract) instrument).getCurrencyPair().toString().replace("/", "").toLowerCase()
-        : instrument.toString().replace("/", "").toLowerCase();
+    String channelPrefix=instrument.toString().replace("/", "").toLowerCase();
+    if (instrument instanceof FuturesContract){
+      FuturesContract contract=(FuturesContract) instrument;
+      if(contract.isPerpetual()){
+        channelPrefix= contract.getCurrencyPair().toString().replace("/", "").toLowerCase();
+      }
+    }
+    return channelPrefix;
   }
 
   /**
@@ -556,7 +561,7 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
                 result = true;
               } else {
                 result = instrument instanceof FuturesContract ? ((depth.getFirstUpdateId() <= lastUpdateId
-                    && depth.getLastUpdateId() >= lastUpdateId ) || (depth.getFinalUpdateId()<= lastUpdateId)) :
+                    && depth.getLastUpdateId() >= lastUpdateId ) || (depth.getPu()<= lastUpdateId)) :
                     (depth.getFirstUpdateId() <= lastUpdateId + 1
                         && depth.getLastUpdateId() >= lastUpdateId + 1);
               }

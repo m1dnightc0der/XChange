@@ -292,15 +292,17 @@ public class BinanceStreamingExchange extends BinanceExchange implements Streami
   }
 
   private static Stream<String> subscriptionStrings(List<Instrument> currencyPairs) {
+
     return currencyPairs.stream().map(BinanceStreamingExchange::getPrefix);
   }
 
   private static String getPrefix(Instrument pair) {
     String prefix = String.join("", pair.toString().split("/")).toLowerCase();
     if (pair instanceof FuturesContract) {
-      prefix =
-          String.join("", ((FuturesContract) pair).getCurrencyPair().toString().split("/"))
-              .toLowerCase();
+      FuturesContract contract = (FuturesContract) pair;
+      if(contract.isPerpetual()) {
+        prefix = String.join("", contract.getCurrencyPair().toString().split("/")).toLowerCase();
+      }
     }
 
     return prefix;

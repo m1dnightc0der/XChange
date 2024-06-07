@@ -49,8 +49,12 @@ public class OkexAdapters {
         okexOrderDetails -> {
           Instrument instrument = adaptOkexInstrumentId(okexOrderDetails.getInstrumentId());
           userTradeList.add(
-                  new UserTrade.Builder()
-                          .originalAmount(convertContractSizeToVolume(okexOrderDetails.getAmount(), instrument, exchangeMetaData.getInstruments().get(instrument).getContractValue()))
+              UserTrade.builder()
+                  .originalAmount(
+                      (exchangeMetaData==null ? new BigDecimal(okexOrderDetails.getAmount())  : convertContractSizeToVolume(
+                          okexOrderDetails.getAmount(),
+                          instrument,
+                          exchangeMetaData.getInstruments().get(instrument).getContractValue())))
                           .instrument(instrument)
                           .price(new BigDecimal(okexOrderDetails.getAverageFilledPrice()))
                           .type(adaptOkexOrderSideToOrderType(okexOrderDetails.getSide()))
@@ -72,10 +76,10 @@ public class OkexAdapters {
     Instrument instrument = adaptOkexInstrumentId(order.getInstrumentId());
     return new LimitOrder(
         "buy".equals(order.getSide()) ? Order.OrderType.BID : Order.OrderType.ASK,
-        convertContractSizeToVolume(
+        (exchangeMetaData==null ?  new BigDecimal(order.getAmount()) : convertContractSizeToVolume(
             order.getAmount(),
             instrument,
-            exchangeMetaData.getInstruments().get(instrument).getContractValue()),
+            exchangeMetaData.getInstruments().get(instrument).getContractValue())),
         instrument,
         order.getOrderId(),
         new Date(Long.parseLong(order.getCreationTime())),
@@ -105,66 +109,32 @@ public class OkexAdapters {
     return OkexAmendOrderRequest.builder()
         .instrumentId(adaptInstrument(order.getInstrument()))
         .orderId(order.getId())
-        .amendedAmount(convertVolumeToContractSize(order, exchangeMetaData))
+        .amendedAmount(exchangeMetaData==null ? order.getOriginalAmount().toString() : convertVolumeToContractSize(order, exchangeMetaData))
         .amendedPrice(order.getLimitPrice().toString())
         .build();
   }
 
-  public static OkexOrderRequest adaptOrder(MarketOrder order, ExchangeMetaData exchangeMetaData) {
-    return OkexOrderRequest.builder().instrumentId(adaptInstrument(order.getInstrument()))
-        .tradeMode(order.getInstrument() instanceof CurrencyPair ? "cash" : "cross").side(adaptSide(order.getType()))
-        .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")
+  public static OkexOrderRequest adaptOrder(
+      MarketOrder order, ExchangeMetaData exchangeMetaData, String accountLevel) {
+    return OkexOrderRequest.builder()
+        .instrumentId(adaptInstrument(order.getInstrument()))
+        .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
+        .side(adaptSide(order.getType()))
+        .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")// PosSide should come as a input from an extended LimitOrder class to
         // support Futures/Swap capabilities of Okex, till then it should be null to
         // perform "net" orders
-        .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY)).clientOrderId(order.getUserReference()).orderType(OkexOrderType.market.name())
-        .amount(order.getOriginalAmount().toString()).build();
-  }
-
-  public static OkexOrderRequest adaptOrder(LimitOrder order, ExchangeMetaData exchangeMetaData) {
-    return OkexOrderRequest.builder().instrumentId(adaptInstrument(order.getInstrument()))
-        .tradeMode(order.hasFlag(OkexOrderFlags.CROSS_MARGIN) ? "cross" : (order.getInstrument() instanceof CurrencyPair ? "cash" : "isolated"))
-        .side(adaptSide(order.getType())).posSide(
-            order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : (order.getInstrument() instanceof CurrencyPair ? null : "net"))
-        // support Futures/Swap capabilities of Okex, till then it should be null to
-        // perform "net" orders
-        .clientOrderId(order.getUserReference())
-        // we only want to set this if it is set
         .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
-        .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
-        .amount(order.getOriginalAmount().toString()).price(order.getLimitPrice().toString())
-
+        .clientOrderId(order.getUserReference())
+        .orderType(OkexOrderType.market.name())
+        .amount(exchangeMetaData==null ? order.getOriginalAmount().toString(): convertVolumeToContractSize(order, exchangeMetaData))
         .build();
-  }
-
-  /**
-   * contract_size to volume: crypto-margined contracts：contract_size,volume(contract_size to
-   * volume:volume = sz*ctVal/price) USDT-margined contracts:sz,volume,USDT(contract_size to
-   * volume:volume = contract_size*ctVal;contract_size to USDT:volume = contract_size*ctVal*price)
-   * OPTION:volume = sz*ctMult volume to contract_size: crypto-margined
-   * contracts：contract_size,volume(coin to contract_size:contract_size = volume*price/ctVal)
-   * USDT-margined contracts:contract_size,volume,USDT(coin to contract_size:contract_size =
-   * volume/ctVal;USDT to contract_size:contract_size = volume/ctVal/price)
-   */
-  private static String convertVolumeToContractSize(
-      Order order, ExchangeMetaData exchangeMetaData) {
-    return (order.getInstrument() instanceof FuturesContract)
-        ? order
-            .getOriginalAmount()
-            .divide(
-                exchangeMetaData.getInstruments().get(order.getInstrument()).getContractValue(),
-                0,
-                RoundingMode.HALF_DOWN)
-            .toPlainString()
-        : order.getOriginalAmount().toString();
   }
   public static OkexOrderRequest adaptOrder(StopOrder order, ExchangeMetaData exchangeMetaData) {
     if (order.getIntention() != null && order.getIntention().equals(StopOrder.Intention.TAKE_PROFIT)) {
 
       return OkexOrderRequest.builder().instrumentId(adaptInstrument(order.getInstrument()))
           .tradeMode(order.hasFlag(OkexOrderFlags.CROSS_MARGIN) ? "cross" : (order.getInstrument() instanceof CurrencyPair ? "cash" : "isolated"))
-          .side(adaptSide(order.getType())).posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ?
-              adaptPosSide(order.getType()) :
-              (order.getInstrument() instanceof CurrencyPair ? null : "net"))
+          .side(adaptSide(order.getType())).posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")
           // support Futures/Swap capabilities of Okex, till then it should be null to
           // perform "net" orders
           .clientOrderId(order.getUserReference())
@@ -173,7 +143,7 @@ public class OkexAdapters {
           // we only want to set this if it is set
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
           .orderType(OkexOrderType.conditional.name())
-        //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
+          //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
           .amount(order.getOriginalAmount().toString()).build();
 
 
@@ -191,10 +161,59 @@ public class OkexAdapters {
           .orderType(OkexOrderType.conditional.name())
           // we only want to set this if it is set
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
-        //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
+          //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
           .amount(order.getOriginalAmount().toString()).build();
     }
 
+  }
+
+  /**
+   * contract_size to volume: crypto-margined contracts：contract_size,volume(contract_size to
+   * volume:volume = sz*ctVal/price) USDT-margined contracts:sz,volume,USDT(contract_size to
+   * volume:volume = contract_size*ctVal;contract_size to USDT:volume = contract_size*ctVal*price)
+   * OPTION:volume = sz*ctMult volume to contract_size: crypto-margined
+   * contracts：contract_size,volume(coin to contract_size:contract_size = volume*price/ctVal)
+   * USDT-margined contracts:contract_size,volume,USDT(coin to contract_size:contract_size =
+   * volume/ctVal;USDT to contract_size:contract_size = volume/ctVal/price)
+   */
+  private static String convertVolumeToContractSize(
+      Order order, ExchangeMetaData exchangeMetaData) {
+    return  order.getOriginalAmount().toString();
+  }
+
+  private static BigDecimal convertContractSizeToVolume(
+      String okexSize, Instrument instrument, BigDecimal contractValue) {
+    return //(instrument instanceof FuturesContract)
+       // ? new BigDecimal(okexSize).multiply(contractValue).stripTrailingZeros()
+    //    :
+    new BigDecimal(okexSize).stripTrailingZeros();
+  }
+
+  private static String adaptTradeMode(Instrument instrument, String accountLevel) {
+    if (accountLevel.equals("3") || accountLevel.equals("4")) {
+      return "cross";
+    } else {
+      return (instrument instanceof CurrencyPair) ? "cash" : "cross";
+    }
+  }
+
+  public static OkexOrderRequest adaptOrder(
+      LimitOrder order, ExchangeMetaData exchangeMetaData, String accountLevel) {
+    return OkexOrderRequest.builder()
+        .instrumentId(adaptInstrument(order.getInstrument()))
+        .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
+        .side(adaptSide(order.getType()))
+        .posSide(
+            order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : (order.getInstrument() instanceof CurrencyPair ? null : "net")) // PosSide should come as a input from an extended LimitOrder class to
+        // support Futures/Swap capabilities of Okex, till then it should be null to
+        // perform "net" orders
+        .clientOrderId(order.getUserReference())
+        .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
+        .orderType(adaptOrderType(order.getOrderFlags(),order.getInstrument()))
+
+        .amount(exchangeMetaData==null ?order.getOriginalAmount().toString() :  convertVolumeToContractSize(order, exchangeMetaData))
+        .price(order.getLimitPrice().toString())
+        .build();
   }
 
   public static String adaptSide(OrderType orderType) {
@@ -210,6 +229,21 @@ public class OkexAdapters {
       default:
         return null;
     }
+  }
+
+  public static String adaptOrderType(Collection<Order.IOrderFlags> orderFlags, Instrument instrument) {
+
+
+     if(orderFlags.contains(OkexOrderFlags.OPTIMAL_LIMIT_IOC)
+        && instrument instanceof FuturesContract)
+      return OkexOrderType.optimal_limit_ioc.name();
+    else if(orderFlags.contains(OkexOrderFlags.IOC))
+      return OkexOrderType.ioc.name();
+    if(orderFlags.contains(OkexOrderFlags.POST_ONLY))
+      return OkexOrderType.post_only.name();
+    else
+      return OkexOrderType.limit.name();
+
   }
 
   public static String adaptPosSide(OrderType orderType) {
@@ -248,7 +282,7 @@ public class OkexAdapters {
         .getBids()
         .forEach(okexBid -> bids.add(adaptLimitOrder(okexBid, instrument, OrderType.BID)));
 
-    return new OrderBook(Date.from(Instant.now()), asks, bids);
+    return new OrderBook(okexOrderbooks.get(0).getTs(), asks, bids);
   }
 
   public static OrderBook adaptOrderBook(
@@ -494,7 +528,7 @@ public class OkexAdapters {
                             okexPosition
                                 .getPosition()
                                 .abs()
-                                .multiply(
+                                .multiply((exchangeMetaData==null )  ? BigDecimal.ONE :
                                     exchangeMetaData
                                         .getInstruments()
                                         .get(adaptOkexInstrumentId(okexPosition.getInstrumentId()))

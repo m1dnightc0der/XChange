@@ -73,7 +73,9 @@ public class OkexStreamingService extends JsonNettyStreamingService {
                 if (pingPongSubscription != null && !pingPongSubscription.isDisposed()) {
                   pingPongSubscription.dispose();
                 }
-
+                    if(!this.isSocketOpen()){
+                        this.connect();
+                    }
                 pingPongSubscription = pingPongSrc.subscribe(o -> this.sendMessage("ping"));
                 completable.onComplete();
               } catch (Exception e) {

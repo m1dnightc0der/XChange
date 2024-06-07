@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.knowm.xchange.binance.dto.account.AssetDetail;
+import org.knowm.xchange.binance.dto.account.AssetPortfolioMarginBalance;
 import org.knowm.xchange.binance.dto.account.BinanceAccountInformation;
 import org.knowm.xchange.binance.dto.account.futures.BinanceFutureAccountInformation;
 import org.knowm.xchange.binance.dto.account.futures.BinancePosition;
@@ -86,12 +87,19 @@ public class BinanceAdapters {
     if (pair.equals(CurrencyPair.IOTA_BTC)) {
       symbol = "IOTABTC";
     } else if (pair instanceof FuturesContract) {
+      FuturesContract contract = (FuturesContract) pair;
       if (isInverse) {
-        FuturesContract contract = (FuturesContract) pair;
+
         symbol = contract.getCurrencyPair().toString().replace("/", "");
         symbol = symbol + "_" + contract.getPrompt();
       } else {
-        symbol = ((FuturesContract) pair).getCurrencyPair().toString().replace("/", "");
+        if(contract.isPerpetual()) {
+
+          symbol = contract.getCurrencyPair().toString().replace("/", "");
+        } else {
+          symbol = contract.getCurrencyPair().toString().replace("/", "")+"_"+contract.getPrompt();
+
+        }
       }
     } else if (pair instanceof OptionsContract) {
       symbol = ((OptionsContract) pair).getCurrencyPair().toString().replace("/", "");
@@ -391,6 +399,64 @@ else
         .id("spot")
         .features(Collections.singleton(Wallet.WalletFeature.TRADING))
         .build();
+  }
+
+  public static List<Wallet> adaptBinancePortfolioMarginWallet(List<AssetPortfolioMarginBalance> binanceAccountInformation) {
+
+    List<Wallet> wallets=new ArrayList<Wallet>();
+
+    List<Balance> crossMarginBorrow =
+        binanceAccountInformation.stream()
+            .filter(b ->  b.getCrossMarginBorrowed().compareTo(BigDecimal.ZERO)!=0
+                || b.getCrossMarginInterest().compareTo(BigDecimal.ZERO)!=0
+                )
+            .map(b -> new Balance(b.getCurrency(),((b.getCrossMarginBorrowed().add(b.getCrossMarginInterest()).negate())), b.getCrossMarginFree()))
+            .collect(Collectors.toList());
+
+    List<Balance> crossMargin =
+        binanceAccountInformation.stream()
+            .filter(b -> b.getCrossMarginAsset().compareTo(BigDecimal.ZERO)!=0
+            )
+            .map(b -> new Balance(b.getCurrency(),b.getCrossMarginAsset(), b.getCrossMarginFree()))
+            .collect(Collectors.toList());
+
+    List<Balance> UMMargin =
+        binanceAccountInformation.stream()
+            .filter(b -> b.getUMWalletBalance().compareTo(BigDecimal.ZERO)!=0
+
+            )
+            .map(b -> new Balance(b.getCurrency(), b.getUMWalletBalance(), b.getUMWalletBalance().add(b.getUMUnrealizedPNL())))
+            .collect(Collectors.toList());
+
+    List<Balance> CMMargin =
+        binanceAccountInformation.stream()
+            .filter(b -> b.getCMWalletBalance().compareTo(BigDecimal.ZERO)!=0
+
+            )
+            .map(b -> new Balance(b.getCurrency(), b.getCMWalletBalance(), b.getCMWalletBalance().add(b.getCMUnrealizedPNL())))
+            .collect(Collectors.toList());
+    wallets.add( new Wallet.Builder()
+        .balances(crossMargin)
+        .id("margin")
+        .features(Collections.singleton(Wallet.WalletFeature.MARGIN_TRADING))
+        .build());
+    wallets.add( new Wallet.Builder()
+        .balances(crossMarginBorrow)
+        .id("borrow")
+        .features(Collections.singleton(Wallet.WalletFeature.MARGIN_TRADING))
+        .build());
+    wallets.add( new Wallet.Builder()
+        .balances(UMMargin)
+        .id("USD Margined Futures")
+        .features(Collections.singleton(Wallet.WalletFeature.FUTURES_TRADING))
+        .build());
+    wallets.add( new Wallet.Builder()
+        .balances(CMMargin)
+        .id("Coin Margined Futures")
+        .features(Collections.singleton(Wallet.WalletFeature.FUTURES_TRADING))
+        .build());
+
+    return wallets;
   }
 
   public synchronized static List<OpenPosition> adaptOpenPositions(List<BinancePosition> binancePositions) {

@@ -109,6 +109,10 @@ public class BinanceAccountService extends BinanceAccountServiceRaw implements A
           openPositions.addAll(
               BinanceAdapters.adaptOpenPositions(futureAccountInformation.getPositions()));
         }
+          if(exchange.isPortfolioMarginEnabled()){
+            wallets.addAll(BinanceAdapters.adaptBinancePortfolioMarginWallet(portfolioMarginBalances()));
+            //wallets.add(BinanceAdapters.adaptBinancePortfolioMarginWallet(portfolioMarginBalances()));
+          } else
         wallets.add(BinanceAdapters.adaptBinanceSpotWallet(account()));
       }
       return new AccountInfo(
@@ -151,6 +155,34 @@ public class BinanceAccountService extends BinanceAccountServiceRaw implements A
       throw BinanceErrorAdapter.adapt(e);
     }
   }
+
+
+  public String borrowMargin(Currency currency, BigDecimal amount)
+      throws IOException {
+    try {
+      if(exchange.isPortfolioMarginEnabled()) {
+        return portfolioMarginBorrow(currency.getCurrencyCode(), amount).getId();
+      } else {
+        return null;
+      }
+    } catch (BinanceException e) {
+      throw BinanceErrorAdapter.adapt(e);
+    }
+  }
+
+
+  public String repayMargin(Currency currency, BigDecimal amount)
+      throws IOException {
+    try { if(exchange.isPortfolioMarginEnabled()) {
+      return portfolioMarginRepayment(currency.getCurrencyCode(), amount).getId();
+    } else {
+      return null;
+    }
+    } catch (BinanceException e) {
+      throw BinanceErrorAdapter.adapt(e);
+    }
+  }
+
 
   @Override
   public String withdrawFunds(Currency currency, BigDecimal amount, AddressWithTag address)

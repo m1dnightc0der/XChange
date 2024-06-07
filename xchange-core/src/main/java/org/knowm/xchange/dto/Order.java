@@ -110,7 +110,7 @@ public abstract class Order implements Serializable {
         cumulativeAmount,
         fee,
         status,
-        Integer.toString(100000000 + random.nextInt(100000000)));
+        "");
   }
 
   /**

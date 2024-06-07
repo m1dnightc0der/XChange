@@ -6,5 +6,8 @@ public enum OkexOrderFlags implements Order.IOrderFlags {
     POST_ONLY,
     REDUCE_ONLY,
     LONG_SHORT,
-    CROSS_MARGIN
+    CROSS_MARGIN,
+    OPTIMAL_LIMIT_IOC,
+    IOC,
+    FOK
 }

@@ -22,6 +22,8 @@ import si.mazi.rescu.SynchronizedValueFactory;
 public class OkexExchange extends BaseExchange {
 
   public static final String PARAM_USE_AWS = "Use_AWS";
+
+  public static final String PARAM_CONVERT_QUANTITIES = "Convert_Quantities";
   public static final String PARAM_AWS_SSL_URI = "AWSSslUri";
   public static final String PARAM_AWS_HOST = "AWSHost";
   public static final String PARAM_SIMULATED = "simulated";
@@ -75,6 +77,7 @@ public class OkexExchange extends BaseExchange {
     exchangeSpecification.setExchangeDescription("Okx Exchange");
 
     exchangeSpecification.setExchangeSpecificParametersItem(PARAM_USE_AWS, false);
+    exchangeSpecification.setExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES, true);
     exchangeSpecification.setExchangeSpecificParametersItem(
         PARAM_AWS_SSL_URI, "https://aws.okx.com");
     exchangeSpecification.setExchangeSpecificParametersItem(PARAM_AWS_HOST, "aws.okx.com");

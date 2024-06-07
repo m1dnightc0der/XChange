@@ -1,7 +1,10 @@
 package org.knowm.xchange.okex.service;
 
 import org.knowm.xchange.client.ResilienceRegistries;
+import org.knowm.xchange.currency.CurrencyPair;
+import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.account.AccountInfo;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
 import org.knowm.xchange.okex.OkexExchange;
 import org.knowm.xchange.okex.dto.OkexException;
@@ -40,7 +43,7 @@ public class OkexAccountService extends OkexAccountServiceRaw implements Account
       throws OkexException, IOException {
 
 
-    if (instrument instanceof FuturesContract ) {
+    if (instrument instanceof FuturesContract) {
       return setLeverage(OkexAdapters.adaptInstrument(instrument), "",leverage.toString(),  marginMode,  positionSide);
 
 

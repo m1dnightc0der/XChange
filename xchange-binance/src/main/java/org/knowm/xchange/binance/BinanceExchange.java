@@ -99,6 +99,9 @@ public class BinanceExchange extends BaseExchange implements Exchange {
     return enabledSandbox(exchangeSpecification);
   }
 
+  public boolean usingPortfolioMargin() {
+    return enabledPortfolioMargin(exchangeSpecification);
+  }
   @Override
   public void remoteInit() {
 
@@ -109,7 +112,9 @@ public class BinanceExchange extends BaseExchange implements Exchange {
       BinanceAccountService accountService = (BinanceAccountService) getAccountService();
       Map<String, AssetDetail> assetDetailMap = null;
       if (!usingSandbox() && isAuthenticated()) {
-        assetDetailMap = accountService.getAssetDetails(); // not available in sndbox
+        if(!usingPortfolioMargin()) {
+          assetDetailMap = accountService.getAssetDetails();
+        }// not available in sndbox or porfolio
       }
       if (usingSandbox()) {
         if (isFuturesSandbox()) {
@@ -157,5 +162,10 @@ public class BinanceExchange extends BaseExchange implements Exchange {
         || Boolean.TRUE.equals(
             exchangeSpecification.getExchangeSpecificParametersItem(
                 SPECIFIC_PARAM_USE_FUTURES_SANDBOX));
+  }
+
+  private static boolean enabledPortfolioMargin(ExchangeSpecification exchangeSpecification) {
+    return Boolean.TRUE.equals(
+        exchangeSpecification.getExchangeSpecificParametersItem(SPECIFIC_PARAM_PORTFOLIO_MARGIN_ENABLED));
   }
 }
