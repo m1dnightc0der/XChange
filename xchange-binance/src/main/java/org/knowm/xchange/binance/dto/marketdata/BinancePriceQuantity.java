@@ -19,6 +19,9 @@ public final class BinancePriceQuantity {
   @JsonDeserialize(converter = StringToCurrencyPairConverter.class)
   CurrencyPair currencyPair;
 
+  @JsonProperty("symbol")
+  String symbol;
+
   @JsonProperty("bidPrice")
   BigDecimal bidPrice;
 

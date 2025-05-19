@@ -17,10 +17,7 @@ import org.knowm.xchange.binance.dto.account.AssetPortfolioMarginBalance;
 import org.knowm.xchange.binance.dto.account.BinanceAccountInformation;
 import org.knowm.xchange.binance.dto.account.futures.BinanceFutureAccountInformation;
 import org.knowm.xchange.binance.dto.account.futures.BinancePosition;
-import org.knowm.xchange.binance.dto.marketdata.BinanceAggTrades;
-import org.knowm.xchange.binance.dto.marketdata.BinanceFundingRate;
-import org.knowm.xchange.binance.dto.marketdata.BinanceKline;
-import org.knowm.xchange.binance.dto.marketdata.BinancePriceQuantity;
+import org.knowm.xchange.binance.dto.marketdata.*;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.BinanceExchangeInfo;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.Filter;
 import org.knowm.xchange.binance.dto.meta.exchangeinfo.Symbol;
@@ -46,6 +43,9 @@ import org.knowm.xchange.instrument.Instrument;
 public class BinanceAdapters {
   private static final DateTimeFormatter DATE_TIME_FMT =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+  private static final Map<String, CurrencyPair> SYMBOL_TO_CURRENCY_PAIR = new HashMap<>();
+
 
   private BinanceAdapters() {}
 
@@ -205,6 +205,13 @@ else
 
   }
 
+  public static void putSymbolMapping(String symbol, CurrencyPair currencyPair) {
+    SYMBOL_TO_CURRENCY_PAIR.put(symbol, currencyPair);
+  }
+  public static CurrencyPair toCurrencyPair(String symbol) {
+    return SYMBOL_TO_CURRENCY_PAIR.get(symbol);
+  }
+
   public static synchronized Instrument adaptSymbol(String symbol, boolean isFuture) {
     int pairLength = symbol.length();
     CurrencyPair currencyPair;
@@ -272,14 +279,35 @@ else
     }
     return builder.build();
   }
+  public static Ticker toTicker(BinanceTicker24h binanceTicker24h, boolean isFuture) {
+    Instrument instrument = (isFuture) ? new FuturesContract(binanceTicker24h.getCurrencyPair(), "PERP"): binanceTicker24h.getCurrencyPair();
+    return new Ticker.Builder()
+        .instrument(instrument)
+        .open(binanceTicker24h.getOpenPrice())
+        .ask(binanceTicker24h.getAskPrice())
+        .bid(binanceTicker24h.getBidPrice())
+        .last(binanceTicker24h.getLastPrice())
+        .high(binanceTicker24h.getHighPrice())
+        .low(binanceTicker24h.getLowPrice())
+        .volume(binanceTicker24h.getVolume())
+        .vwap(binanceTicker24h.getWeightedAvgPrice())
+        .askSize(binanceTicker24h.getAskQty())
+        .bidSize(binanceTicker24h.getBidQty())
+        .quoteVolume(binanceTicker24h.getQuoteVolume())
+        .timestamp(
+            binanceTicker24h.getCloseTime() > 0 ? new Date(binanceTicker24h.getCloseTime()) : null)
+        .percentageChange(binanceTicker24h.getPriceChangePercent())
+        .build();
+  }
+
 
   private static synchronized Ticker adaptPriceQuantity(BinancePriceQuantity priceQuantity, boolean isFuture) {
     return new Ticker.Builder()
-        .instrument(adaptSymbol(priceQuantity.symbol, isFuture))
-        .ask(priceQuantity.askPrice)
-        .askSize(priceQuantity.askQty)
-        .bid(priceQuantity.bidPrice)
-        .bidSize(priceQuantity.bidQty)
+        .instrument(adaptSymbol(priceQuantity.getSymbol(), isFuture))
+        .ask(priceQuantity.getAskPrice())
+        .askSize(priceQuantity.getAskQty())
+        .bid(priceQuantity.getBidPrice())
+        .bidSize(priceQuantity.getBidQty())
         .build();
   }
 
@@ -550,7 +578,7 @@ else
 
   public static void adaptFutureExchangeMetaData(
       ExchangeMetaData exchangeMetaData, BinanceExchangeInfo binanceExchangeInfo) {
-    Symbol[] futureSymbols = binanceExchangeInfo.getSymbols();
+    List<Symbol> futureSymbols = binanceExchangeInfo.getSymbols();
 
     for (Symbol futureSymbol : futureSymbols) {
       if (futureSymbol.getStatus().equals("TRADING")) { // Symbols which are trading
@@ -615,7 +643,7 @@ else
     Map<Instrument, InstrumentMetaData> instruments = new HashMap<>();
     Map<Currency, CurrencyMetaData> currencies = new HashMap<>();
 
-    Symbol[] symbols = binanceExchangeInfo.getSymbols();
+    List<Symbol> symbols = binanceExchangeInfo.getSymbols();
 
     for (Symbol symbol : symbols) {
       if (symbol.getStatus().equals("TRADING")) { // Symbols which are trading

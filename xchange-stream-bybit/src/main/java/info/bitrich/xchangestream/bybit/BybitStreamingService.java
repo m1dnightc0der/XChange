@@ -91,6 +91,8 @@ public class BybitStreamingService extends JsonNettyStreamingService {
       throw new ExchangeException("Invalid API secret", e);
     } catch (JsonProcessingException e) {
       throw new RuntimeException(e);
+    } catch (Exception e) {
+      throw new RuntimeException(e);
     }
   }
 
@@ -114,6 +116,31 @@ public class BybitStreamingService extends JsonNettyStreamingService {
     LOG.info(" getUnsubscribeMessage {}", channelName);
     return objectMapper.writeValueAsString(
         new BybitSubscribeMessage("unsubscribe", Collections.singletonList(channelName)));
+  }
+
+  @Override public void resubscribeChannels() throws IOException {
+    LOG.debug("bybit resubscribeChannels : called from {}", Thread.currentThread().getStackTrace()[2]);
+
+    if (!isSocketOpen()) {
+      connect();
+    }
+    if (spec.getApiKey() != null ) {
+      LOG.debug("connect: loging in");
+
+      try {
+        login();
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+/*    if (xSpec.getApiKey() != null && !isLoggedIn){
+      try {
+        synchronousLogin(10);
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }*/
+    super.resubscribeChannels();
   }
 
   @Override

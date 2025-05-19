@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import org.junit.Test;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitAccountType;
 import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.dto.account.AccountInfo;
@@ -16,7 +17,7 @@ public class BybitAccountServiceTest extends BaseWiremockTest {
   public void testGetWalletBalancesWithUnified() throws IOException {
     Exchange bybitExchange = createExchange();
     BybitAccountService bybitAccountService =
-        new BybitAccountService(bybitExchange, BybitAccountType.UNIFIED);
+        new BybitAccountService((BybitExchange) bybitExchange, bybitExchange.getResilienceRegistries(), BybitAccountType.UNIFIED);
 
     initGetStub("/v5/account/wallet-balance", "/getWalletBalance.json5");
 
@@ -31,7 +32,7 @@ public class BybitAccountServiceTest extends BaseWiremockTest {
   public void testGetAllCoinsBalanceWithFund() throws IOException {
     Exchange bybitExchange = createExchange();
     BybitAccountService bybitAccountService =
-        new BybitAccountService(bybitExchange, BybitAccountType.FUND);
+        new BybitAccountService((BybitExchange) bybitExchange, bybitExchange.getResilienceRegistries(), BybitAccountType.FUND);
 
     initGetStub("/v5/asset/transfer/query-account-coins-balance", "/getAllCoinsBalance.json5");
 

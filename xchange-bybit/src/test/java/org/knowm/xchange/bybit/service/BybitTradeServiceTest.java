@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.util.Collection;
 import org.junit.Test;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.Order.OrderStatus;
@@ -25,7 +26,7 @@ public class BybitTradeServiceTest extends BaseWiremockTest {
   @Test
   public void testGetBybitOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeService bybitAccountService = new BybitTradeService(bybitExchange);
+    BybitTradeService bybitAccountService = new BybitTradeService((BybitExchange) bybitExchange, bybitExchange.getResilienceRegistries());
 
     String orderDetails =
         "{\n"
@@ -107,7 +108,7 @@ public class BybitTradeServiceTest extends BaseWiremockTest {
   @Test
   public void testPlaceBybitOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeService bybitAccountService = new BybitTradeService(bybitExchange);
+    BybitTradeService bybitAccountService = new BybitTradeService((BybitExchange) bybitExchange, bybitExchange.getResilienceRegistries());
 
     String orderPlacementResponse =
         "{\n"

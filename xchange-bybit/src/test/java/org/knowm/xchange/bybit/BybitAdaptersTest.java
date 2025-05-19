@@ -21,6 +21,12 @@ public class BybitAdaptersTest {
 
     assertThat(guessSymbol("BTCUSDT", BybitCategory.LINEAR)).isEqualTo(new FuturesContract("BTC/USDT/PERP"));
     assertThat(guessSymbol("ETHPERP", BybitCategory.LINEAR)).isEqualTo(new FuturesContract("ETH/USDC/PERP"));
+    assertThat(guessSymbol("BTC-27SEP24", BybitCategory.LINEAR)).isEqualTo(new FuturesContract("BTC/USDC/27SEP24"));
+
+
+    assertThat(guessSymbol("BTCUSD", BybitCategory.INVERSE)).isEqualTo(new FuturesContract("BTC/USD/PERP"));
+    assertThat(guessSymbol("BTCUSDM24", BybitCategory.INVERSE)).isEqualTo(new FuturesContract("BTC/USD/M24"));
+
   }
 
   @Test

@@ -8,6 +8,8 @@ import info.bitrich.xchangestream.core.StreamingMarketDataService;
 import info.bitrich.xchangestream.service.netty.StreamingObjectMapperHelper;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
+
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Date;
@@ -107,6 +109,24 @@ public class BybitStreamingMarketDataService implements StreamingMarketDataServi
         orderBookUpdatesSubscriptions(instrument, asks, bids, timestamp);
       }
       return Observable.just(orderBook);
+    } else if (orderBookUpdateIdPrev.get() !=0) {
+      LOG.error("orderBookUpdate id sequence failed, expected {}, in fact {}",
+              orderBookUpdateIdPrev,
+              bybitOrderBookUpdate.getData().getU());
+      // resubscribe or what here?
+      orderBookUpdateIdPrev.set(0);
+      orderBookMap.remove(instrument);
+      try {
+        //service.getUnsubscribeMessage(channelUniqueId);
+        streamingService.sendMessage(streamingService.getUnsubscribeMessage(channelUniqueId)).sync();
+        streamingService.resubscribeChannel(channelUniqueId);
+      } catch (IOException ex) {
+        throw new RuntimeException(ex);
+      } catch (InterruptedException e) {
+        throw new RuntimeException(e);
+      }
+
+      return Observable.fromIterable(new LinkedList<>());
     } else {
       LOG.error("orderBookUpdate id sequence failed, expected {}, in fact {}",
           orderBookUpdateIdPrev,

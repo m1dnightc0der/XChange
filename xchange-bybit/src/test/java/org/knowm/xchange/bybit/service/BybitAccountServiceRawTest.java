@@ -7,6 +7,7 @@ import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.bybit.dto.BybitResult;
 import org.knowm.xchange.bybit.dto.account.allcoins.BybitAllCoinBalance;
@@ -25,7 +26,7 @@ public class BybitAccountServiceRawTest extends BaseWiremockTest {
   @Before
   public void setUp() throws Exception {
     Exchange bybitExchange = createExchange();
-    bybitAccountServiceRaw = new BybitAccountServiceRaw(bybitExchange);
+    bybitAccountServiceRaw = new BybitAccountServiceRaw((BybitExchange) bybitExchange,bybitExchange.getResilienceRegistries());
   }
 
   @Test

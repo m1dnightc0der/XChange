@@ -1,10 +1,12 @@
 package info.bitrich.xchangestream.service;
 
 import io.reactivex.rxjava3.core.Completable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Base class of streaming services, declares connect() method including before connection logic */
 public abstract class ConnectableService {
-
+  private final Logger LOG = LoggerFactory.getLogger(this.getClass());
   /**
    * Exchange specific parameter is used for providing {@link Runnable} action which is caused
    * before setup new connection. For example adding throttle control for limiting too often opening
@@ -32,6 +34,7 @@ public abstract class ConnectableService {
   protected abstract Completable openConnection();
 
   public Completable connect() {
+    LOG.debug("connect called from: {}",  Thread.currentThread().getStackTrace()[2]);
     beforeConnectionHandler.run();
     return openConnection();
   }

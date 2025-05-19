@@ -1,19 +1,25 @@
 package org.knowm.xchange.bybit.service;
 
 import java.io.IOException;
+import java.util.List;
+
 import org.knowm.xchange.bybit.BybitAdapters;
 import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.bybit.dto.BybitResult;
 import org.knowm.xchange.bybit.dto.marketdata.instruments.BybitInstrumentInfo;
 import org.knowm.xchange.bybit.dto.marketdata.instruments.BybitInstrumentsInfo;
+import org.knowm.xchange.bybit.dto.marketdata.orderbooks.BybitOrderbook;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.BybitTicker;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.BybitTickers;
+import org.knowm.xchange.bybit.dto.marketdata.trades.BybitTrade;
+import org.knowm.xchange.bybit.dto.marketdata.trades.BybitTradeResponse;
+import org.knowm.xchange.client.ResilienceRegistries;
 
 public class BybitMarketDataServiceRaw extends BybitBaseService {
 
-  public BybitMarketDataServiceRaw(BybitExchange exchange) {
-    super(exchange);
+  public BybitMarketDataServiceRaw    (  BybitExchange exchange, ResilienceRegistries resilienceRegistries) {
+    super(exchange, resilienceRegistries);
   }
 
   public BybitResult<BybitTickers<BybitTicker>> getTicker24h(BybitCategory category, String symbol)
@@ -26,6 +32,32 @@ public class BybitMarketDataServiceRaw extends BybitBaseService {
     return result;
   }
 
+  public BybitResult<BybitOrderbook> getOrderBook(BybitCategory category, String symbol)
+      throws IOException {
+    return getOrderBook( category,  symbol, 50);
+
+  }
+  public BybitResult<BybitOrderbook> getOrderBook(BybitCategory category, String symbol,int depth)
+      throws IOException {
+    BybitResult<BybitOrderbook> result = bybit.getOrderbook(category.getValue(), symbol, depth);
+
+    if (!result.isSuccess()) {
+      throw BybitAdapters.createBybitExceptionFromResult(result);
+    }
+    return result;
+  }
+
+
+  public BybitResult<BybitTradeResponse> getBybitTrades(BybitCategory category, String symbol)
+      throws BybitException, IOException {
+    BybitResult<BybitTradeResponse> result = bybit.getTrades(category.getValue(), symbol);
+
+    if (!result.isSuccess()) {
+      throw BybitAdapters.createBybitExceptionFromResult(result);
+    }
+    return result;
+
+  }
   public BybitResult<BybitInstrumentsInfo<BybitInstrumentInfo>> getInstrumentsInfo(
       BybitCategory category) throws IOException {
     BybitResult<BybitInstrumentsInfo<BybitInstrumentInfo>> result =

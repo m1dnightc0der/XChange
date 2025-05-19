@@ -13,6 +13,7 @@ import org.knowm.xchange.bybit.service.BybitAccountService;
 import org.knowm.xchange.bybit.service.BybitMarketDataService;
 import org.knowm.xchange.bybit.service.BybitMarketDataServiceRaw;
 import org.knowm.xchange.bybit.service.BybitTradeService;
+import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.exceptions.ExchangeException;
 
 public class BybitExchange extends BaseExchange {
@@ -22,17 +23,27 @@ public class BybitExchange extends BaseExchange {
 //  private static final String DEMO_URL = "https://api-demo.bybit.com";
   private static final String TESTNET_URL = "https://api-testnet.bybit.com";
 
-
+  private static ResilienceRegistries RESILIENCE_REGISTRIES;
   @Override
   protected void initServices() {
-    marketDataService = new BybitMarketDataService(this);
-    tradeService = new BybitTradeService(this);
+
+
+    marketDataService = new BybitMarketDataService(this,getResilienceRegistries());
+    tradeService = new BybitTradeService(this, getResilienceRegistries());
     accountService =
         new BybitAccountService(
-            this,
+            this,getResilienceRegistries(),
             (BybitAccountType)
                 getExchangeSpecification()
                     .getExchangeSpecificParametersItem(SPECIFIC_PARAM_ACCOUNT_TYPE));
+  }
+
+  @Override
+  public ResilienceRegistries getResilienceRegistries() {
+    if (RESILIENCE_REGISTRIES == null) {
+      RESILIENCE_REGISTRIES = BybitResilience.createRegistries();
+    }
+    return RESILIENCE_REGISTRIES;
   }
 
   @Override

@@ -10,6 +10,11 @@ import io.reactivex.rxjava3.core.Observable;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.account.OpenPosition;
+import org.knowm.xchange.instrument.Instrument;
+
+import java.util.List;
+
+import static org.knowm.xchange.bybit.BybitAdapters.getCategory;
 
 public class BybitStreamingTradeService implements StreamingTradeService {
 
@@ -19,6 +24,14 @@ public class BybitStreamingTradeService implements StreamingTradeService {
   public BybitStreamingTradeService(BybitStreamingService streamingService) {
     this.streamingService = streamingService;
   }
+
+
+    @Override
+    public Observable<Order> getOrderChanges(Instrument instrument, Object... args) {
+        BybitCategory category = getCategory(instrument);
+        return getOrderChanges( category);
+
+    }
 
   public Observable<Order> getOrderChanges(BybitCategory category) {
     String channelUniqueId = "order";

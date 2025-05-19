@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.bybit.dto.BybitResult;
+import org.knowm.xchange.bybit.dto.account.BybitPosition;
 import org.knowm.xchange.bybit.dto.account.allcoins.BybitAllCoinBalance;
 import org.knowm.xchange.bybit.dto.account.allcoins.BybitAllCoinsBalance;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitCoinWalletBalance;
@@ -21,10 +22,14 @@ import org.knowm.xchange.bybit.dto.marketdata.instruments.linear.BybitLinearInve
 import org.knowm.xchange.bybit.dto.marketdata.instruments.option.BybitOptionInstrumentInfo;
 import org.knowm.xchange.bybit.dto.marketdata.instruments.option.BybitOptionInstrumentInfo.OptionType;
 import org.knowm.xchange.bybit.dto.marketdata.instruments.spot.BybitSpotInstrumentInfo;
+import org.knowm.xchange.bybit.dto.marketdata.orderbooks.BybitOrderbook;
+import org.knowm.xchange.bybit.dto.marketdata.orderbooks.BybitPublicOrder;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.BybitTicker;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.linear.BybitLinearInverseTicker;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.option.BybitOptionTicker;
 import org.knowm.xchange.bybit.dto.marketdata.tickers.spot.BybitSpotTicker;
+import org.knowm.xchange.bybit.dto.marketdata.trades.BybitTrade;
+import org.knowm.xchange.bybit.dto.trade.BybitOrderFlags;
 import org.knowm.xchange.bybit.dto.trade.BybitOrderStatus;
 import org.knowm.xchange.bybit.dto.trade.BybitSide;
 import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetail;
@@ -37,9 +42,14 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.Order.OrderStatus;
 import org.knowm.xchange.dto.Order.OrderType;
 import org.knowm.xchange.dto.account.Balance;
+import org.knowm.xchange.dto.account.OpenPosition;
+import org.knowm.xchange.dto.account.OpenPositions;
 import org.knowm.xchange.dto.account.Wallet;
+import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Ticker.Builder;
+import org.knowm.xchange.dto.marketdata.Trade;
+import org.knowm.xchange.dto.marketdata.Trades;
 import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
@@ -49,7 +59,8 @@ import org.knowm.xchange.instrument.Instrument;
 public class BybitAdapters {
 
   private static final SimpleDateFormat OPTION_DATE_FORMAT = new SimpleDateFormat("ddMMMyy", Locale.US);
-  public static final List<String> QUOTE_CURRENCIES = Arrays.asList("USDT", "USDC", "EUR", "BTC", "ETH", "DAI", "BRZ");
+  public static final List<String> QUOTE_CURRENCIES = Arrays.asList("USDT", "USDC", "EUR", "BTC", "ETH", "DAI", "BRZ","USD");
+  public static final List<String> SETTLE_CURRENCIES = Arrays.asList("USDC", "USDT");
 
   public static Wallet adaptBybitBalances(List<BybitCoinWalletBalance> coinWalletBalances) {
     List<Balance> balances = new ArrayList<>(coinWalletBalances.size());
@@ -62,7 +73,59 @@ public class BybitAdapters {
     }
     return Wallet.Builder.from(balances).build();
   }
+  public static OrderBook adaptBybitOrderBook(
+      BybitOrderbook bybitOrderbook, Instrument instrument) {
+    List<LimitOrder> asks = new ArrayList<>();
+    List<LimitOrder> bids = new ArrayList<>();
+    Date timeStamp = new Date(Long.parseLong(bybitOrderbook.getTs()));
 
+    bybitOrderbook
+        .getAsks()
+        .forEach(bybitAsk -> asks.add(adaptLimitOrder(bybitAsk, instrument, OrderType.ASK, timeStamp)));
+
+    bybitOrderbook
+        .getBids()
+        .forEach(bybitBid -> bids.add(adaptLimitOrder(bybitBid, instrument, OrderType.BID, timeStamp)));
+
+    return new OrderBook(timeStamp, asks, bids);
+  }
+  public static LimitOrder adaptLimitOrder(
+      BybitPublicOrder bybitPublicOrder, Instrument instrument, OrderType orderType, Date timestamp) {
+    return adaptOrderbookOrder(
+        bybitPublicOrder.getVolume(), bybitPublicOrder.getPrice(), instrument, orderType,timestamp);
+  }
+
+  public static Trades adaptBybitTrades(List<BybitTrade> bybitTrades, Instrument instrument) {
+    List<Trade> trades = new ArrayList<>();
+
+    bybitTrades.forEach(
+        bybitTrade ->
+            trades.add(
+                new Trade.Builder()
+                    .id(bybitTrade.getExecId())
+                    .instrument(instrument)
+                    .originalAmount(bybitTrade.getSide().toLowerCase().equals("sell") ? bybitTrade.getSize().abs().negate() : bybitTrade.getSize().abs() )
+                    .price(bybitTrade.getPrice())
+                    .timestamp(bybitTrade.getTime())
+                    .type(adaptBybitOrderSideToOrderType(bybitTrade.getSide()))
+                    .build()));
+
+    return new Trades(trades);
+  }
+  public static Order.OrderType adaptBybitOrderSideToOrderType(String bybitOrderSide) {
+
+    return bybitOrderSide.toLowerCase().equals("buy") ? Order.OrderType.BID : Order.OrderType.ASK;
+  }
+  public static LimitOrder adaptOrderbookOrder(
+      BigDecimal amount, BigDecimal price, Instrument instrument, Order.OrderType orderType, Date timestamp) {
+
+    return new LimitOrder(orderType, amount, instrument, "", timestamp, price);
+  }
+
+/*  public static OrderBook adaptBybitOrderBook(
+      BybitResult<List<BybitOrderbook>> bybitOrderbook, Instrument instrument) {
+    return adaptOrderBook(BybitOrderbook.getData(), instrument);
+  }*/
   public static Wallet adaptBybitBalances(BybitAllCoinsBalance allCoinsBalance) {
     List<Balance> balances = new ArrayList<>(allCoinsBalance.getBalance().size());
     for (BybitAllCoinBalance coinBalance : allCoinsBalance.getBalance()) {
@@ -76,10 +139,10 @@ public class BybitAdapters {
   }
 
   public static BybitSide getSideString(Order.OrderType type) {
-    if (type == Order.OrderType.ASK) {
+    if (type == Order.OrderType.ASK || type == OrderType.EXIT_BID) {
       return BybitSide.SELL;
     }
-    if (type == Order.OrderType.BID) {
+    if (type == Order.OrderType.BID || type == OrderType.EXIT_ASK) {
       return BybitSide.BUY;
     }
     throw new IllegalArgumentException("invalid order type");
@@ -152,6 +215,19 @@ public class BybitAdapters {
     int splitIndex = symbol.length() - 3;
     return new CurrencyPair(symbol.substring(0, splitIndex), symbol.substring(splitIndex));
   }
+  public static Instrument adaptInstrument(CurrencyPair currencyPair, BybitCategory category) {
+    if(category.equals(BybitCategory.SPOT)) {
+      return currencyPair;
+    }
+    else if (category.equals(OPTION)) {
+      return new OptionsContract.Builder().currencyPair(currencyPair).build();
+    }
+    else {
+      return new FuturesContract(
+          currencyPair, "SWAP");
+    }
+  }
+
 
   public static Instrument guessSymbol(String symbol, BybitCategory category) {
     switch (category) {
@@ -161,10 +237,33 @@ public class BybitAdapters {
       case LINEAR: {
         if (symbol.endsWith("USDT")) {
           int splitIndex = symbol.lastIndexOf("USDT");
-          return new FuturesContract((symbol.substring(0, splitIndex)+"/"+ symbol.substring(splitIndex)+"/PERP"));
+          return new FuturesContract((symbol.substring(0, splitIndex) + "/" + symbol.substring(splitIndex) + "/PERP"));
         } else if (symbol.endsWith("PERP")) {
           int splitIndex = symbol.lastIndexOf("PERP");
-          return new FuturesContract((symbol.substring(0, splitIndex)+"/"+ "USDC/PERP"));
+          return new FuturesContract((symbol.substring(0, splitIndex) + "/" + "USDC/PERP"));
+        } else {
+
+          String[] symbols = symbol.split("-");
+          return new FuturesContract((symbols[0] + "/" + "USDC/" + symbols[1]));
+        }
+      }
+      case INVERSE: {
+        if (symbol.endsWith("USD")) {
+          int splitIndex = symbol.lastIndexOf("USD");
+          return new FuturesContract((symbol.substring(0, splitIndex) + "/" + symbol.substring(splitIndex) + "/PERP"));
+
+        } else  {
+          int splitIndex = symbol.length()-3;
+          String currencyPairSymbol = symbol.substring(0, splitIndex);
+          for (String quoteCurrency : QUOTE_CURRENCIES) {
+            if (currencyPairSymbol.endsWith(quoteCurrency)) {
+              int ccySplitIndex = symbol.lastIndexOf(quoteCurrency);
+              return new FuturesContract((currencyPairSymbol.substring(0, ccySplitIndex) + "/" + currencyPairSymbol.substring(ccySplitIndex)+"/" + symbol.substring(splitIndex)));
+
+            }
+          }
+
+
         }
       }
     }
@@ -221,6 +320,7 @@ public class BybitAdapters {
         .priceStepSize(instrumentInfo.getPriceFilter().getTickSize())
         .build();
   }
+
 
   public static InstrumentMetaData symbolToCurrencyPairMetaData(
       BybitLinearInverseInstrumentInfo instrumentInfo) {
@@ -418,5 +518,58 @@ public class BybitAdapters {
       case OPTION: {}
     }
     return null;
+  }
+
+  public static OpenPosition.Type adaptOpenPositionType(BybitPosition bybitPosition) {
+    switch (bybitPosition.getSide().toLowerCase()) {
+      case "buy":
+        return OpenPosition.Type.LONG;
+      case "sell":
+        return OpenPosition.Type.SHORT;
+      case "none":
+        return (bybitPosition.getSize().compareTo(BigDecimal.ZERO) >= 0)
+            ? OpenPosition.Type.LONG
+            : OpenPosition.Type.SHORT;
+      default:
+        throw new UnsupportedOperationException();
+    }
+  }
+
+  public static OpenPositions adaptOpenPositions(List<BybitPosition> positions, BybitCategory category) {
+      List<OpenPosition> openPositions = new ArrayList<>();
+
+    positions.stream().forEach(
+              bybitPosition ->
+                  openPositions.add(
+                      new OpenPosition.Builder()
+                          .instrument(adaptInstrument(guessSymbol(bybitPosition.getSymbol()),category))
+                          .liquidationPrice(bybitPosition.getLiqPrice())
+                          .price(bybitPosition.getAvgPrice())
+                          .type(adaptOpenPositionType(bybitPosition))
+                          .size(
+                              bybitPosition
+                                  .getSize()
+                                  )
+                          .unRealisedPnl(bybitPosition.getUnrealisedPnl())
+                          .build()));
+      return new OpenPositions(openPositions);
+
+
+  }
+
+  public static String getTimeInForce(LimitOrder limitOrder) {
+
+    if (limitOrder.hasFlag(BybitOrderFlags.FOK)){
+      return "FillOrKill";
+    }
+    else if (limitOrder.hasFlag(BybitOrderFlags.IOC)){
+      return "ImmediateOrCancel";
+    }
+    else if (limitOrder.hasFlag(BybitOrderFlags.POST_ONLY)){
+      return "PostOnly";
+    } else{
+      return null;
+    }
+
   }
 }

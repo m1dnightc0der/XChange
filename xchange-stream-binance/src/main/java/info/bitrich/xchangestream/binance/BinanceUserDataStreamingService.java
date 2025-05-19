@@ -4,9 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import info.bitrich.xchangestream.binance.dto.BaseBinanceWebSocketTransaction.BinanceWebSocketTypes;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
 import info.bitrich.xchangestream.service.netty.WebSocketClientCompressionAllowClientNoContextAndServerNoContextHandler;
+import io.netty.channel.ChannelFuture;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
 import io.reactivex.rxjava3.core.Observable;
-import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,7 +64,8 @@ public class BinanceUserDataStreamingService extends JsonNettyStreamingService {
   }
 
   @Override
-  public void sendMessage(String message) {
+  public ChannelFuture sendMessage(String message) {
     // Subscriptions are made upon connection - no messages are sent.
+    return null;
   }
 }

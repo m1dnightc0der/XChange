@@ -36,7 +36,6 @@ public abstract class BaseExchange implements Exchange {
 
   @Override
   public void applySpecification(ExchangeSpecification exchangeSpecification) {
-
     ExchangeSpecification defaultSpecification = getDefaultExchangeSpecification();
 
     // Check if default is for everything

@@ -9,6 +9,8 @@ import io.reactivex.rxjava3.core.Observable;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.bitmex.BitmexExchange;
 
+import java.io.IOException;
+
 /** Created by Lukas Zaoralek on 12.11.17. */
 public class BitmexStreamingExchange extends BitmexExchange implements StreamingExchange {
   private static final String API_URI = "wss://www.bitmex.com/realtime";
@@ -92,7 +94,7 @@ public class BitmexStreamingExchange extends BitmexExchange implements Streaming
   }
 
   @Override
-  public void resubscribeChannels() {
+  public void resubscribeChannels() throws IOException {
     streamingService.resubscribeChannels();
   }
 

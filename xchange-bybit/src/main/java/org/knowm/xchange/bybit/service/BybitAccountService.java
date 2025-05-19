@@ -7,11 +7,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.BybitResult;
 import org.knowm.xchange.bybit.dto.account.allcoins.BybitAllCoinsBalance;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitAccountBalance;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitAccountType;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitWalletBalance;
+import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.dto.account.AccountInfo;
 import org.knowm.xchange.dto.account.Wallet;
 import org.knowm.xchange.service.account.AccountService;
@@ -20,8 +22,11 @@ public class BybitAccountService extends BybitAccountServiceRaw implements Accou
 
   private final BybitAccountType accountType;
 
-  public BybitAccountService(Exchange exchange, BybitAccountType accountType) {
-    super(exchange);
+  public BybitAccountService(BybitExchange exchange, ResilienceRegistries resilienceRegistries, BybitAccountType accountType) {
+
+
+
+    super(exchange, resilienceRegistries);
     this.accountType = accountType;
   }
 

@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import org.apache.commons.io.IOUtils;
 import org.junit.Test;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
+import org.knowm.xchange.bybit.BybitResilience;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.bybit.dto.BybitResult;
 import org.knowm.xchange.bybit.dto.trade.BybitOrderResponse;
@@ -24,13 +26,14 @@ import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetail;
 import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetails;
 import org.knowm.xchange.bybit.dto.trade.details.linear.BybitLinearOrderDetail;
 import org.knowm.xchange.bybit.dto.trade.details.spot.BybitSpotOrderDetail;
+import org.knowm.xchange.client.ResilienceRegistries;
 
 public class BybitTradeServiceRawTest extends BaseWiremockTest {
 
   @Test
   public void testGetBybitLinearDetailOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw(bybitExchange);
+    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw((BybitExchange) bybitExchange,BybitResilience.createRegistries());
 
     String responseFilePath = "/getOrderDetailsLinear.json5";
     initGetStub("/v5/order/realtime", responseFilePath);
@@ -133,7 +136,7 @@ public class BybitTradeServiceRawTest extends BaseWiremockTest {
   @Test
   public void testGetBybitSpotDetailOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw(bybitExchange);
+    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw((BybitExchange) bybitExchange,BybitResilience.createRegistries());
 
     String responseFilePath = "/getOrderDetailsSpot.json5";
     initGetStub("/v5/order/realtime", responseFilePath);
@@ -225,7 +228,7 @@ public class BybitTradeServiceRawTest extends BaseWiremockTest {
   @Test
   public void testPlaceBybitMarketOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw(bybitExchange);
+    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw((BybitExchange) bybitExchange,BybitResilience.createRegistries());
 
     String orderPlacementResponse =
         "{\n"
@@ -268,7 +271,7 @@ public class BybitTradeServiceRawTest extends BaseWiremockTest {
   @Test
   public void testPlaceBybitLimitOrder() throws IOException {
     Exchange bybitExchange = createExchange();
-    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw(bybitExchange);
+    BybitTradeServiceRaw bybitAccountServiceRaw = new BybitTradeServiceRaw((BybitExchange) bybitExchange, BybitResilience.createRegistries());
 
     String orderPlacementResponse =
         "{\n"
@@ -297,7 +300,7 @@ public class BybitTradeServiceRawTest extends BaseWiremockTest {
             BybitSide.BUY,
             BigDecimal.valueOf(0.1),
             BigDecimal.valueOf(1000),
-            null);
+            null,null);
 
     ObjectMapper mapper = new ObjectMapper();
     JsonNode responseObject = mapper.readTree(orderPlacementResponse);

@@ -4,17 +4,19 @@ import static org.knowm.xchange.bybit.BybitAdapters.createBybitExceptionFromResu
 
 import java.io.IOException;
 import org.knowm.xchange.Exchange;
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.BybitCategory;
 import org.knowm.xchange.bybit.dto.BybitResult;
 import org.knowm.xchange.bybit.dto.account.allcoins.BybitAllCoinsBalance;
 import org.knowm.xchange.bybit.dto.account.feerates.BybitFeeRates;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitAccountType;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitWalletBalance;
+import org.knowm.xchange.client.ResilienceRegistries;
 
 public class BybitAccountServiceRaw extends BybitBaseService {
 
-  public BybitAccountServiceRaw(Exchange exchange) {
-    super(exchange);
+  public BybitAccountServiceRaw(BybitExchange exchange, ResilienceRegistries resilienceRegistries) {
+    super(exchange, resilienceRegistries);
   }
 
   public BybitResult<BybitWalletBalance> getWalletBalances(BybitAccountType accountType)

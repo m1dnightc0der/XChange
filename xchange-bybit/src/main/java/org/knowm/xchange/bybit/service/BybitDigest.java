@@ -6,16 +6,19 @@ import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.QueryParam;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Map;
 import java.util.TreeMap;
 import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
 import lombok.SneakyThrows;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.service.BaseParamsDigest;
 import si.mazi.rescu.Params;
 import si.mazi.rescu.ParamsDigest;
 import si.mazi.rescu.RestInvocation;
-
+import org.apache.commons.codec.binary.Hex;
 public class BybitDigest extends BaseParamsDigest {
 
   public static final String X_BAPI_API_KEY = "X-BAPI-API-KEY";
@@ -40,10 +43,8 @@ public class BybitDigest extends BaseParamsDigest {
   public String digestParams(RestInvocation restInvocation) {
     Map<String, String> headers = getHeaders(restInvocation);
     Map<String, String> params = getInputParams(restInvocation);
-    Map<String, String> sortedParams = new TreeMap<>(params);
 
-    // timestamp + API key + (recv_window) + (queryString | jsonBodyString)
-    String plainText = getPlainText(restInvocation, sortedParams);
+    String plainText = getPlainText(restInvocation, params);
     String input =
         headers.get(X_BAPI_TIMESTAMP)
             + headers.get(X_BAPI_API_KEY)

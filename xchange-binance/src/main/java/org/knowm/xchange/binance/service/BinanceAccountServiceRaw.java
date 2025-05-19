@@ -29,7 +29,13 @@ public class BinanceAccountServiceRaw extends BinanceBaseService {
         .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), 5)
         .call();
   }
-
+  public List<BinanceCurrencyInfo> currencyInfos() throws BinanceException, IOException {
+    return decorateApiCall(
+        () -> binance.getCurrencyInfos(getRecvWindow(), getTimestampFactory(), apiKey, signatureCreator))
+        .withRetry(retry("currencyInfo"))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), 5)
+        .call();
+  }
   public List<AssetPortfolioMarginBalance> portfolioMarginBalances() throws BinanceException, IOException {
 
     return decorateApiCall(

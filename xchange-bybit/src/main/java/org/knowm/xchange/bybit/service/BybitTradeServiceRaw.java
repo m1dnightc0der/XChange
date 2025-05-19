@@ -4,21 +4,22 @@ import static org.knowm.xchange.bybit.BybitAdapters.createBybitExceptionFromResu
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import org.knowm.xchange.Exchange;
+
+import org.knowm.xchange.bybit.BybitExchange;
 import org.knowm.xchange.bybit.dto.BybitCategory;
-import org.knowm.xchange.bybit.dto.trade.BybitAmendOrderPayload;
-import org.knowm.xchange.bybit.dto.trade.BybitPlaceOrderPayload;
+import org.knowm.xchange.bybit.dto.account.BybitPosition;
+import org.knowm.xchange.bybit.dto.account.BybitPositionDetails;
+import org.knowm.xchange.bybit.dto.trade.*;
 import org.knowm.xchange.bybit.dto.BybitResult;
-import org.knowm.xchange.bybit.dto.trade.BybitOrderResponse;
-import org.knowm.xchange.bybit.dto.trade.BybitOrderType;
-import org.knowm.xchange.bybit.dto.trade.BybitSide;
 import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetail;
 import org.knowm.xchange.bybit.dto.trade.details.BybitOrderDetails;
+import org.knowm.xchange.client.ResilienceRegistries;
+import org.knowm.xchange.exceptions.ExchangeException;
 
 public class BybitTradeServiceRaw extends BybitBaseService {
 
-  public BybitTradeServiceRaw(Exchange exchange) {
-    super(exchange);
+  public BybitTradeServiceRaw (   BybitExchange exchange, ResilienceRegistries resilienceRegistries) {
+    super(exchange, resilienceRegistries);
   }
 
   public BybitResult<BybitOrderDetails<BybitOrderDetail>> getBybitOrder(
@@ -51,10 +52,10 @@ public class BybitTradeServiceRaw extends BybitBaseService {
 
   public BybitResult<BybitOrderResponse> placeLimitOrder(
       BybitCategory category, String symbol, BybitSide side, BigDecimal qty, BigDecimal limitPrice,
-      String orderLinkId)
+      String orderLinkId, String timeInForce)
       throws IOException {
     BybitPlaceOrderPayload payload = new BybitPlaceOrderPayload(category.getValue(),
-        symbol, side.getValue(), BybitOrderType.LIMIT.getValue(), qty, orderLinkId, limitPrice);
+        symbol, side.getValue(), BybitOrderType.LIMIT.getValue(), qty, orderLinkId, limitPrice,timeInForce);
     BybitResult<BybitOrderResponse> placeOrder =
         bybitAuthenticated.placeLimitOrder(
             apiKey,
@@ -66,6 +67,90 @@ public class BybitTradeServiceRaw extends BybitBaseService {
     }
     return placeOrder;
   }
+
+  public BybitResult<BybitPositionDetails<BybitPosition>> getPositions(
+      BybitCategory category, String symbol, String settleCoin, String cursor       )
+      throws BybitException, IOException {
+    try {
+
+      BybitResult<BybitPositionDetails<BybitPosition>> response = decorateApiCall(
+          () -> bybitAuthenticated.getPositions(apiKey, signatureCreator, nonceFactory, category.getValue(), settleCoin, symbol,
+              cursor,200)).withRateLimiter(rateLimiter(bybitAuthenticated.positionsPath)).call();
+
+      if (response.getResult()!=null &&  response.getResult().getNextPageCursor()!=null){
+        String nextCursor = response.getResult().getNextPageCursor();
+        String priorCursor=null;
+        while (nextCursor != null && !nextCursor.isEmpty() && !nextCursor.equals(priorCursor)) {
+          priorCursor=nextCursor;
+          String finalNextCursor = nextCursor;
+          BybitResult<BybitPositionDetails<BybitPosition>>  loopResponse = decorateApiCall(
+              () -> bybitAuthenticated.getPositions(apiKey, signatureCreator, nonceFactory, category.getValue(), settleCoin, symbol,
+                  finalNextCursor,200)).withRateLimiter(rateLimiter(bybitAuthenticated.positionsPath)).call();
+          response.getResult().getList().addAll(loopResponse.getResult().getList());
+
+          if (loopResponse.getResult() != null && loopResponse.getResult().getNextPageCursor() != null) {
+            nextCursor = loopResponse.getResult().getNextPageCursor();
+          } else {
+            nextCursor = null;
+
+          }
+
+        }
+      }
+      return response;
+    } catch (BybitException e) {
+      throw new ExchangeException(e);
+    }
+  }
+
+  public BybitResult<BybitOrderResponse> cancelBybitOrder(BybitCancelOrderRequest order)
+      throws IOException {
+    try {
+      return decorateApiCall(
+          () ->
+              bybitAuthenticated.cancelOrder(apiKey, signatureCreator, nonceFactory,
+                  order))
+          .withRateLimiter(rateLimiter(bybitAuthenticated.cancelOrderPath))
+          .call();
+    } catch (BybitException e) {
+      throw new ExchangeException(e);
+    }
+  }
+
+  public  BybitResult<BybitOrderDetails<BybitOrderDetail>> getBybitPendingOrder(
+      BybitCategory category, String symbol, String settleCoin, String cursor ,String order       )
+      throws BybitException, IOException {
+    try {
+
+      String finalCursor = cursor;
+      BybitResult<BybitOrderDetails<BybitOrderDetail>> response = decorateApiCall(
+          () -> bybitAuthenticated.getPendingOrders(apiKey, signatureCreator, nonceFactory, category.getValue(), settleCoin, symbol, finalCursor, order)).withRateLimiter(rateLimiter(bybitAuthenticated.positionsPath)).call();
+
+      if (response.getResult() != null && response.getResult().getNextPageCursor() != null) {
+        String nextCursor = response.getResult().getNextPageCursor();
+        String priorCursor=null;
+        while (nextCursor != null && !nextCursor.isEmpty() && !nextCursor.equals(priorCursor)) {
+          priorCursor=nextCursor;
+          String finalNextCursor = nextCursor;
+          BybitResult<BybitOrderDetails<BybitOrderDetail>> loopResponse = decorateApiCall(
+              () -> bybitAuthenticated.getPendingOrders(apiKey, signatureCreator, nonceFactory, category.getValue(), settleCoin, symbol, finalNextCursor, order)).withRateLimiter(rateLimiter(bybitAuthenticated.positionsPath)).call();
+          response.getResult().getList().addAll(loopResponse.getResult().getList());
+          if (loopResponse.getResult() != null && loopResponse.getResult().getNextPageCursor() != null) {
+            nextCursor = loopResponse.getResult().getNextPageCursor();
+          } else {
+            nextCursor = null;
+
+          }
+        }
+      }
+      return response;
+    } catch (BybitException e) {
+      throw new ExchangeException(e);
+    }
+  }
+
+
+
 
   public BybitResult<BybitOrderResponse> amendOrder(BybitCategory category, String symbol, String orderId,
       String orderLinkId, String triggerPrice, String qty, String price, String tpslMode, String takeProfit,

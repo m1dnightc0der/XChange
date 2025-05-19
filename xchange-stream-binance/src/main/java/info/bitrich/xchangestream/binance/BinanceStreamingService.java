@@ -8,6 +8,7 @@ import info.bitrich.xchangestream.core.ProductSubscription;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
 import info.bitrich.xchangestream.service.netty.WebSocketClientCompressionAllowClientNoContextAndServerNoContextHandler;
 import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
@@ -183,13 +184,14 @@ public class BinanceStreamingService extends JsonNettyStreamingService {
   }
 
   @Override
-  public void sendMessage(String message) {
+  public ChannelFuture sendMessage(String message) {
 
     if (isLiveSubscriptionEnabled) {
       super.sendMessage(message);
     }
     // If Live Subscription is disabled, Subscriptions are made upon connection - no messages are
     // sent.
+    return null;
   }
 
   @Override

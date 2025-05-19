@@ -14,6 +14,7 @@ import org.knowm.xchange.utils.AuthUtils;
 import si.mazi.rescu.SynchronizedValueFactory;
 
 public class BinanceExchange extends BaseExchange implements Exchange {
+  public static String EXCHANGE_TYPE = "Exchange_Type";
   public static final String SPECIFIC_PARAM_USE_SANDBOX = "Use_Sandbox";
   public static final String SPECIFIC_PARAM_USE_FUTURES_SANDBOX = "Use_Sandbox_Futures";
   public static final String SPECIFIC_PARAM_FUTURES_ENABLED = "Futures_Enabled";
