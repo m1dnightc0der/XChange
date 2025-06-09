@@ -39,11 +39,7 @@ import org.knowm.xchange.service.trade.params.TradeHistoryParams;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsIdSpan;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsSorted;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamsTimeSpan;
-import org.knowm.xchange.service.trade.params.orders.DefaultOpenOrdersParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParamCurrencyPair;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParams;
-import org.knowm.xchange.service.trade.params.orders.OrderQueryParams;
+import org.knowm.xchange.service.trade.params.orders.*;
 
 public class DeribitTradeService extends DeribitTradeServiceRaw implements TradeService {
 
@@ -120,7 +116,7 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
     Boolean mmp = hasOrderFlag(order, OrderFlags.MMP);
 
     OrderPlacement placement;
-    if (order.getType() == Order.OrderType.BID) {
+    if (order.getType() == Order.OrderType.BID || order.getType() == Order.OrderType.EXIT_ASK) {
       placement =
           super.buy(
               instrumentName,
@@ -137,7 +133,7 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
               trigger,
               advanced,
               mmp);
-    } else if (order.getType() == Order.OrderType.ASK) {
+    } else if (order.getType() == Order.OrderType.ASK  || order.getType() == Order.OrderType.EXIT_BID) {
       placement =
           super.sell(
               instrumentName,
@@ -160,13 +156,13 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
     return placement.getOrder().getOrderId();
   }
 
-  private static Boolean hasOrderFlag(Order order, OrderFlags flag) {
+  public static Boolean hasOrderFlag(Order order, OrderFlags flag) {
     return order.getOrderFlags().contains(flag) ? true : null;
   }
 
-  private static <T extends IOrderFlags> T findOrderFlagValue(Order order, Class<T> klass) {
+  public static <T extends IOrderFlags> T findOrderFlagValue(Order order, Class<T> klass) {
     return order.getOrderFlags().stream()
-        .filter(flag -> flag.getClass().isInstance(klass))
+        .filter(flag -> flag.getClass().getSimpleName().equals(klass.getSimpleName()))
         .map(flag -> (T) flag)
         .findFirst()
         .orElse(null);
@@ -314,7 +310,34 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
 
   @Override
   public Collection<Order> getOrder(OrderQueryParams... orderQueryParams) throws IOException {
-    return getOrder(
-        Arrays.stream(orderQueryParams).map(OrderQueryParams::getOrderId).toArray(String[]::new));
+
+    String[] orderIds = Arrays.stream(orderQueryParams).filter(orderQueryParam -> orderQueryParam.getOrderId().matches("^\\d{10,}$")).map(OrderQueryParams::getOrderId).toArray(String[]::new);
+
+    String[] orderLabels= Arrays.stream(orderQueryParams).filter(orderQueryParam -> orderQueryParam.getOrderId().matches("^(?!\\d{10,}$).*$")).map(OrderQueryParams::getOrderId).toArray(String[]::new);
+    Currency[] currencies=Arrays.stream(orderQueryParams).filter(qp -> qp instanceof OrderQueryParamInstrument)
+            .map(qp -> (OrderQueryParamInstrument) qp).map(OrderQueryParamInstrument::getInstrument).map(Instrument::getBase).toArray(Currency[]::new);
+
+    if (currencies.length==0) {
+      currencies = ((DeribitAccountService) exchange.getAccountService()).currencies().stream().toArray(Currency[]::new);
+    }
+    ArrayList<Order> orders = new ArrayList<Order>();
+    for (int i = 0; i < orderIds.length; i++) {
+      orders.add(DeribitAdapters.adaptOrder(getOrderState(orderIds[i])));
+    }
+
+    for (int i = 0; i < orderLabels.length; i++) {
+      List<org.knowm.xchange.deribit.v2.dto.trade.Order> ordersByLabel;
+      for (Currency c : currencies) {
+        ordersByLabel =getOrderState(orderLabels[i],c.getSymbol());
+        if(ordersByLabel!=null){
+          for(org.knowm.xchange.deribit.v2.dto.trade.Order orderByLabel :ordersByLabel) {
+            orders.add(DeribitAdapters.adaptOrder(orderByLabel));
+          }
+          break;
+        }
+      }
+
+    }
+    return orders;
   }
 }

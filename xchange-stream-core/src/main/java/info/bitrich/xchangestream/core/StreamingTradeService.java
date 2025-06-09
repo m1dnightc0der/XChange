@@ -1,13 +1,19 @@
 package info.bitrich.xchangestream.core;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import io.reactivex.rxjava3.core.Observable;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.Order;
+import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.UserTrade;
 import org.knowm.xchange.exceptions.ExchangeSecurityException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.trade.TradeService;
+import org.knowm.xchange.service.trade.params.CancelOrderParams;
+
+import java.io.IOException;
+import java.util.concurrent.ExecutionException;
 
 public interface StreamingTradeService {
 
@@ -35,8 +41,9 @@ public interface StreamingTradeService {
     throw new NotYetImplementedForExchangeException("getOrderChanges");
   }
 
-  default Observable<Order> getOrderChanges(Instrument instrument, Object... args) {
-    if (instrument instanceof CurrencyPair) {
+  default Observable<Order> getOrderChanges(Instrument instrument, Object... args)
+      throws ExecutionException, JsonProcessingException, InterruptedException {
+    if (instrument!=null && instrument instanceof CurrencyPair) {
       return getOrderChanges((CurrencyPair) instrument, args);
     }
     throw new NotYetImplementedForExchangeException("getOrderChanges");
@@ -71,6 +78,14 @@ public interface StreamingTradeService {
       return getUserTrades((CurrencyPair) instrument, args);
     }
     throw new NotYetImplementedForExchangeException("getUserTrades");
+  }
+
+  default String placeLimitOrder(LimitOrder limitOrder) throws IOException, InterruptedException, Exception {
+    throw new NotYetImplementedForExchangeException("placeLimitOrder");
+  }
+
+  default Observable<Order> cancelOrder(CancelOrderParams params) throws IOException {
+    throw new NotYetImplementedForExchangeException("cancelOrder");
   }
 
   default Observable<UserTrade> getUserTrades() {

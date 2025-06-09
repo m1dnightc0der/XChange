@@ -18,6 +18,7 @@ import info.bitrich.xchangestream.service.netty.WebSocketClientCompressionAllowC
 import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
@@ -322,12 +323,13 @@ public class KrakenStreamingService extends JsonNettyStreamingService {
   }
 
   @Override
-  public void sendMessage(String message) {
+  public ChannelFuture sendMessage(String message) {
     if (rateLimiter != null) {
       RateLimiter.waitForPermission(rateLimiter);
     }
 
     super.sendMessage(message);
+    return null;
   }
 
   @Override

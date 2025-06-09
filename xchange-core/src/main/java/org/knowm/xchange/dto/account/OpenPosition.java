@@ -28,19 +28,64 @@ public class OpenPosition implements Serializable {
   /** The unrealised pnl of the position */
   @JsonIgnore private final BigDecimal unRealisedPnl;
 
+  /** The options delta for the position */
+  @JsonIgnore private final BigDecimal delta;
+
+  @JsonIgnore private final BigDecimal gamma;
+
+  @JsonIgnore private final BigDecimal theta;
+
+  @JsonIgnore private final BigDecimal rho;
+  @JsonIgnore private final BigDecimal vega;
+  @JsonIgnore private final BigDecimal markPrice;
+
   public OpenPosition(
-      @JsonProperty("instrument") Instrument instrument,
-      @JsonProperty("type") Type type,
-      @JsonProperty("size") BigDecimal size,
-      @JsonProperty("price") BigDecimal price,
-      @JsonProperty("liquidationPrice") BigDecimal liquidationPrice,
-      @JsonProperty("unRealisedPnl") BigDecimal unRealisedPnl) {
+          @JsonProperty("instrument") Instrument instrument,
+          @JsonProperty("type") Type type,
+          @JsonProperty("size") BigDecimal size,
+          @JsonProperty("price") BigDecimal price,
+          @JsonProperty("liquidationPrice") BigDecimal liquidationPrice,
+          @JsonProperty("unRealisedPnl") BigDecimal unRealisedPnl,
+          @JsonProperty("delta") BigDecimal delta,
+          @JsonProperty("markPrice") BigDecimal markPrice,
+          @JsonProperty("gamma") BigDecimal gamma,
+          @JsonProperty("theta") BigDecimal theta,
+          @JsonProperty("rho") BigDecimal rho,
+          @JsonProperty("vega") BigDecimal vega
+          ) {
     this.instrument = instrument;
     this.type = type;
     this.size = size;
     this.price = price;
     this.liquidationPrice = liquidationPrice;
     this.unRealisedPnl = unRealisedPnl;
+    this.delta=delta;
+    this.gamma=gamma;
+    this.theta=theta;
+    this.rho=rho;
+    this.vega=vega;
+    this.markPrice=markPrice;
+  }
+  public OpenPosition(
+          @JsonProperty("instrument") Instrument instrument,
+          @JsonProperty("type") Type type,
+          @JsonProperty("size") BigDecimal size,
+          @JsonProperty("price") BigDecimal price,
+          @JsonProperty("liquidationPrice") BigDecimal liquidationPrice,
+          @JsonProperty("unRealisedPnl") BigDecimal unRealisedPnl
+  ) {
+    this.instrument = instrument;
+    this.type = type;
+    this.size = size;
+    this.price = price;
+    this.liquidationPrice = liquidationPrice;
+    this.unRealisedPnl = unRealisedPnl;
+    this.delta=null;
+    this.gamma=null;
+    this.theta=null;
+    this.rho=null;
+    this.vega=null;
+    this.markPrice=null;
   }
 
   public Instrument getInstrument() {
@@ -54,7 +99,31 @@ public class OpenPosition implements Serializable {
   public BigDecimal getSize() {
     return size;
   }
+  public BigDecimal getDelta() {
+    return delta;
+  }
 
+
+  public BigDecimal getGamma() {
+    return gamma;
+  }
+
+
+
+  public BigDecimal getTheta() {
+    return theta;
+  }
+
+
+  public BigDecimal getRho() {
+    return rho;
+  }
+  public BigDecimal getVega() {
+    return vega;
+  }
+  public BigDecimal getMarkPrice() {
+    return markPrice;
+  }
   public BigDecimal getPrice() {
     return price;
   }
@@ -100,6 +169,17 @@ public class OpenPosition implements Serializable {
         + liquidationPrice
         + ", unRealisedPnl="
         + unRealisedPnl
+            + ", delta="
+            + delta
+            + ", theta="
+            + theta
+            + ", gamma="
+            + gamma
+            + ", rho="
+            + rho
+
+            + ", markPrice="
+            + markPrice
         + '}';
   }
 
@@ -115,7 +195,12 @@ public class OpenPosition implements Serializable {
     private BigDecimal price;
     private BigDecimal liquidationPrice;
     private BigDecimal unRealisedPnl;
-
+    private BigDecimal delta;
+    private BigDecimal gamma;
+    private BigDecimal vega;
+    private BigDecimal theta;
+    private BigDecimal rho;
+    private BigDecimal markPrice;
     public static Builder from(OpenPosition openPosition) {
       return new Builder()
           .instrument(openPosition.getInstrument())
@@ -123,7 +208,13 @@ public class OpenPosition implements Serializable {
           .size(openPosition.getSize())
           .liquidationPrice(openPosition.getLiquidationPrice())
           .unRealisedPnl(openPosition.getUnRealisedPnl())
-          .price(openPosition.getPrice());
+          .price(openPosition.getPrice())
+              .delta(openPosition.getDelta())
+              .gamma(openPosition.getGamma())
+              .theta(openPosition.getTheta())
+              .rho(openPosition.getRho())
+              .vega(openPosition.getVega())
+              .markPrice(openPosition.getMarkPrice());
     }
 
     public Builder instrument(final Instrument instrument) {
@@ -156,8 +247,34 @@ public class OpenPosition implements Serializable {
       return this;
     }
 
+    public Builder delta(final BigDecimal delta) {
+      this.delta = delta;
+      return this;
+    }
+    public Builder vega(final BigDecimal vega) {
+      this.vega = vega;
+      return this;
+    }
+    public Builder gamma(final BigDecimal gamma) {
+      this.gamma = gamma;
+      return this;
+    }
+
+    public Builder theta(final BigDecimal theta) {
+      this.theta = theta;
+      return this;
+    }
+
+    public Builder rho(final BigDecimal rho) {
+      this.rho = rho;
+      return this;
+    }
+    public Builder markPrice(final BigDecimal markPrice) {
+      this.markPrice = markPrice;
+      return this;
+    }
     public OpenPosition build() {
-      return new OpenPosition(instrument, type, size, price, liquidationPrice, unRealisedPnl);
+      return new OpenPosition(instrument, type, size, price, liquidationPrice, unRealisedPnl,delta,markPrice, gamma,theta, rho, vega);
     }
   }
 }

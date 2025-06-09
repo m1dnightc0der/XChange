@@ -255,4 +255,8 @@ public class DeribitTradeServiceRaw extends DeribitBaseService {
   public Order getOrderState(String orderId) throws IOException {
     return deribitAuthenticated.getOrderState(orderId, deribitAuth).getResult();
   }
+
+  public List<Order> getOrderState(String label,String currency) throws IOException {
+    return deribitAuthenticated.getOrderStateByLabel(label,currency, deribitAuth).getResult();
+  }
 }

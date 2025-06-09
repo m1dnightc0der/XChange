@@ -45,6 +45,9 @@ public class DeribitCurrency {
   @JsonProperty("withdrawal_fee")
   private BigDecimal withdrawalFee;
 
+  @JsonProperty("in_cross_collateral_pool")
+  private boolean crossCollateralPool;
+
   @JsonProperty("withdrawal_priorities")
   private List<DeribitWithdrawalPriority> withdrawalPriorities = null;
 }

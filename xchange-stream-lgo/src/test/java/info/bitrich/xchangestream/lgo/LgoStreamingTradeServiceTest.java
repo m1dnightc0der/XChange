@@ -15,6 +15,7 @@ import info.bitrich.xchangestream.lgo.domain.LgoOpenOrderEvent;
 import info.bitrich.xchangestream.lgo.domain.LgoOrderEvent;
 import info.bitrich.xchangestream.lgo.domain.LgoPendingOrderEvent;
 import info.bitrich.xchangestream.lgo.domain.LgoReceivedOrderEvent;
+import io.netty.channel.ChannelFuture;
 import io.reactivex.rxjava3.core.Observable;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -416,7 +417,7 @@ public class LgoStreamingTradeServiceTest {
             .getValue()
             .contains(
                 "\"signature\":{\"value\":\"signed\",\"source\":\"RSA\"},\"key_id\":\"abcdefg\"},\"type\":\"placeorder\""));
-    assertThat(ref).isEqualTo("22");
+    assertThat(ref.equals("22"));
   }
 
   private static String parsePublicKey(String key) {

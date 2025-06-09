@@ -36,11 +36,11 @@ public class DeribitAccountService extends DeribitAccountServiceRaw implements A
 
   List<OpenPosition> openPositions() throws IOException {
     List<OpenPosition> openPositions = new ArrayList<>();
-    for (Currency c : currencies()) {
-      super.getPositions(c.getCurrencyCode(), null).stream()
+    //for (Currency c : currencies()) {
+      super.getPositions("any", null).stream()
           .map(DeribitAdapters::adapt)
           .forEach(openPositions::add);
-    }
+
     return openPositions;
   }
 

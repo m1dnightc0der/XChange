@@ -7,9 +7,13 @@ import info.bitrich.xchangestream.core.StreamingMarketDataService;
 import info.bitrich.xchangestream.service.netty.StreamingObjectMapperHelper;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
+
+import java.io.IOException;
 import java.sql.Timestamp;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.marketdata.*;
 import org.knowm.xchange.instrument.Instrument;
@@ -95,8 +99,8 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
   public Observable<OrderBook> getOrderBook(Instrument instrument, Object... args) {
     String instId = OkexAdapters.adaptInstrument(instrument);
     String channelName = args.length >= 1 ? args[0].toString() : "books";
-    String channelUniqueId = ORDERBOOK + instId;
-
+    String channelUniqueId = channelName + instId;
+    AtomicLong orderBookUpdateIdPrev = new AtomicLong();
     return service
         .subscribeChannel(channelUniqueId)
         .filter(message -> message.has("action"))
@@ -113,34 +117,61 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
                           .constructCollectionType(List.class, OkexOrderbook.class));
               if ("snapshot".equalsIgnoreCase(action)) {
                 OrderBook orderBook = OkexAdapters.adaptOrderBook(okexOrderbooks, instrument);
+                  orderBookUpdateIdPrev.set(okexOrderbooks.get(0).getSeqId());
                 orderBookMap.put(instId, orderBook);
                 return Observable.just(orderBook);
               } else if ("update".equalsIgnoreCase(action)) {
-                OrderBook orderBook = orderBookMap.getOrDefault(instId, null);
-                if (orderBook == null) {
-                  LOG.error(String.format("Failed to get orderBook, instId=%s.", instId));
+                if(orderBookUpdateIdPrev.get()==okexOrderbooks.get(0).getPrevSeqId()) {
+
+                  orderBookUpdateIdPrev.set(okexOrderbooks.get(0).getSeqId());
+                  OrderBook orderBook = orderBookMap.getOrDefault(instId, null);
+                  if (orderBook == null) {
+                    LOG.error(String.format("Failed to get orderBook, instId=%s.", instId));
+                    return Observable.fromIterable(new LinkedList<>());
+                  }
+                  Date timestamp = new Timestamp(
+                          Long.parseLong(okexOrderbooks.get(0).getTs()));
+                  okexOrderbooks.get(0).getAsks().forEach(
+                          okexPublicOrder ->
+                                  orderBook.update(
+                                          OkexAdapters.adaptLimitOrder(
+                                                  okexPublicOrder, instrument, Order.OrderType.ASK, timestamp)));
+                  okexOrderbooks.get(0).getBids().forEach(
+                          okexPublicOrder ->
+                                  orderBook.update(
+                                          OkexAdapters.adaptLimitOrder(
+                                                  okexPublicOrder, instrument, Order.OrderType.BID, timestamp)));
+                  if (orderBookUpdatesSubscriptions.get(instrument) != null) {
+                    orderBookUpdatesSubscriptions(
+                            instrument,
+                            okexOrderbooks.get(0).getAsks(),
+                            okexOrderbooks.get(0).getBids(),
+                            timestamp);
+                  }
+                  return Observable.just(orderBook);
+                } else if (orderBookUpdateIdPrev.get() !=0) {
+                  LOG.error("orderBookUpdate id sequence failed, expected {}, in fact {}",
+                          orderBookUpdateIdPrev,
+                          okexOrderbooks.get(0).getPrevSeqId());
+                  // resubscribe or what here?
+                  orderBookUpdateIdPrev.set(0);
+                  orderBookMap.remove(instrument);
+                  try {
+                    //service.getUnsubscribeMessage(channelUniqueId);
+                    service.sendMessage(service.getUnsubscribeMessage(channelUniqueId)).sync();
+                    service.resubscribeChannel(channelUniqueId);
+                  } catch (IOException ex) {
+                    throw new RuntimeException(ex);
+                  } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                  }
+
+                  return Observable.fromIterable(new LinkedList<>());
+                } else {
                   return Observable.fromIterable(new LinkedList<>());
                 }
-                Date timestamp = new Timestamp(
-                    Long.parseLong(okexOrderbooks.get(0).getTs()));
-                okexOrderbooks.get(0).getAsks().forEach(
-                    okexPublicOrder ->
-                        orderBook.update(
-                            OkexAdapters.adaptLimitOrder(
-                                okexPublicOrder, instrument, Order.OrderType.ASK, timestamp)));
-                okexOrderbooks.get(0).getBids().forEach(
-                    okexPublicOrder ->
-                        orderBook.update(
-                            OkexAdapters.adaptLimitOrder(
-                                okexPublicOrder, instrument, Order.OrderType.BID, timestamp)));
-                if (orderBookUpdatesSubscriptions.get(instrument) != null) {
-                  orderBookUpdatesSubscriptions(
-                      instrument,
-                      okexOrderbooks.get(0).getAsks(),
-                      okexOrderbooks.get(0).getBids(),
-                      timestamp);
-                }
-                return Observable.just(orderBook);
+
+
 
               } else {
                 LOG.error(

@@ -79,10 +79,12 @@ public class OkexStreamingPublicDataIntegration {
 
   @Test
   public void testOrderBook() throws InterruptedException {
+    //books50-l2-tbt
+    String[] args = {"books50-l2-tbt"};
     Disposable dis =
         exchange
             .getStreamingMarketDataService()
-            .getOrderBook(currencyPair)
+            .getOrderBook(currencyPair,args)
             .subscribe(
                 orderBook -> {
                   System.out.println(orderBook);
@@ -93,7 +95,7 @@ public class OkexStreamingPublicDataIntegration {
     Disposable dis2 =
         exchange
             .getStreamingMarketDataService()
-            .getOrderBook(instrument)
+            .getOrderBook(instrument,args)
             .subscribe(
                 orderBook -> {
                   System.out.println(orderBook);
@@ -101,7 +103,7 @@ public class OkexStreamingPublicDataIntegration {
                       .isLessThan(orderBook.getAsks().get(0).getLimitPrice());
                   assertThat(orderBook.getBids().get(0).getInstrument()).isEqualTo(instrument);
                 });
-    TimeUnit.SECONDS.sleep(3);
+    TimeUnit.SECONDS.sleep(30);
     dis.dispose();
     dis2.dispose();
   }

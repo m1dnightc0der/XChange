@@ -61,6 +61,8 @@ public abstract class JsonNettyStreamingService extends NettyStreamingService<Js
       sendMessage(objectMapper.writeValueAsString(message));
     } catch (JsonProcessingException e) {
       LOG.error("Error creating json message: {}", e.getMessage());
+    } catch (Exception e) {
+      throw new RuntimeException(e);
     }
   }
 }

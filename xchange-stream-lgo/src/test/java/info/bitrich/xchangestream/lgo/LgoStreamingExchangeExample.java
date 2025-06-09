@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.Date;
+
+import io.netty.channel.ChannelFuture;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -135,7 +137,7 @@ public class LgoStreamingExchangeExample {
 
   @Test
   public void placeMarketOrder() throws IOException {
-    String ref =
+    ChannelFuture ref =
         exchange
             .getStreamingTradeService()
             .placeMarketOrder(

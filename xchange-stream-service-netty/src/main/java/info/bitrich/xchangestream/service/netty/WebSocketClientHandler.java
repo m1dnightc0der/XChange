@@ -124,5 +124,10 @@ public class WebSocketClientHandler extends SimpleChannelInboundHandler<Object> 
       handshakeFuture.setFailure(cause);
     }
     ctx.close();
+    try {
+      throw cause;
+    } catch (Throwable e) {
+      throw new RuntimeException(e);
+    }
   }
 }

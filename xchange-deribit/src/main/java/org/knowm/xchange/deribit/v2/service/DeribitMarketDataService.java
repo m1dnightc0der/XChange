@@ -1,15 +1,22 @@
 package org.knowm.xchange.deribit.v2.service;
 
 import java.io.IOException;
+import java.time.Instant;
+import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
+
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
 import org.knowm.xchange.deribit.v2.DeribitExchange;
 import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitOrderBook;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTicker;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTrades;
+import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trades;
+import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.marketdata.MarketDataService;
@@ -73,5 +80,17 @@ public class DeribitMarketDataService extends DeribitMarketDataServiceRaw
     }
 
     return DeribitAdapters.adaptTrades(deribitTrades, instrument);
+  }
+
+  public static OrderBook convertOrderBook(DeribitOrderBook ob, Instrument pair) {
+    List<LimitOrder> bids =
+        ob.getBids().entrySet().stream()
+            .map(e -> new LimitOrder(Order.OrderType.BID, e.getValue(), pair, null, null, e.getKey()))
+            .collect(Collectors.toList());
+    List<LimitOrder> asks =
+        ob.getAsks().entrySet().stream()
+            .map(e -> new LimitOrder(Order.OrderType.ASK, e.getValue(), pair, null, null, e.getKey()))
+            .collect(Collectors.toList());
+    return new OrderBook(Date.from(Instant.now()), asks, bids);
   }
 }

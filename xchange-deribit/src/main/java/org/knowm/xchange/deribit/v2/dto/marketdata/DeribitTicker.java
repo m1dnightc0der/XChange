@@ -5,10 +5,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.util.Date;
 import lombok.Data;
+import org.knowm.xchange.dto.marketdata.Ticker;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Data
-public class DeribitTicker {
+public class DeribitTicker  {
 
   /** (Only for option) implied volatility for best ask */
   @JsonProperty("ask_iv")
@@ -40,6 +41,9 @@ public class DeribitTicker {
   /** The settlement price for the instrument. Only when state = closed */
   @JsonProperty("delivery_price")
   private BigDecimal deliveryPrice;
+
+  @JsonProperty("estimated_delivery_price")
+  private BigDecimal estimatedDeliveryPrice;
 
   /** Current funding (perpetual only) */
   @JsonProperty("current_funding")

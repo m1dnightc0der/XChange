@@ -23,5 +23,8 @@ public enum OrderFlags implements IOrderFlags {
    */
   REDUCE_ONLY,
   /** Order MMP flag, only for order_type 'limit' */
-  MMP
+  MMP,
+  /** Order FOK flag, only for time in force 'fill_or_kill' */
+
+
 }

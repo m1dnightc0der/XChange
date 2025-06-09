@@ -70,6 +70,12 @@ public class Position {
 
   /** Delta parameter */
   private BigDecimal delta;
+  /** Vega parameter */
+  private BigDecimal vega;
+  /** Gamma parameter */
+  private BigDecimal gamma;
+  /** Theta parameter */
+  private BigDecimal theta;
 
   /** Average price of trades that built this position */
   @JsonProperty("average_price")

@@ -2,15 +2,17 @@ package org.knowm.xchange.deribit.v2.dto.marketdata;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.vavr.Tuple3;
+import lombok.Data;
+
 import java.math.BigDecimal;
 import java.util.Date;
 import java.util.List;
 import java.util.TreeMap;
-import lombok.Data;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Data
-public class DeribitOrderBook {
+public class DeribitStreamingOrderBook {
 
   private final TreeMap<BigDecimal, BigDecimal> bids = new TreeMap<>((k1, k2) -> -k1.compareTo(k2));
   private final TreeMap<BigDecimal, BigDecimal> asks = new TreeMap<>();
@@ -107,6 +109,9 @@ public class DeribitOrderBook {
   @JsonProperty("prev_change_id")
   private long prevChangeId;
 
+  @JsonProperty("type")
+  private String type;
+
   /** The current best bid price, null if there aren't any bids */
   @JsonProperty("best_bid_price")
   private BigDecimal bestBidPrice;
@@ -133,13 +138,13 @@ public class DeribitOrderBook {
 
   /** array of [price, amount] List of bids */
   @JsonProperty("bids")
-  public void setBids(List<List<BigDecimal>> bids) {
+  public void setBids(List<List<String>> bids) {
     convertOrders(bids, this.bids);
   }
 
   /** array of [price, amount], List of asks */
   @JsonProperty("asks")
-  public void setAsks(List<List<BigDecimal>> asks) {
+  public void setAsks(List<List<String>> asks) {
     convertOrders(asks, this.asks);
   }
 
@@ -148,7 +153,7 @@ public class DeribitOrderBook {
   }
 
   private static void convertOrders(
-      List<List<BigDecimal>> from, TreeMap<BigDecimal, BigDecimal> to) {
-    from.forEach(l -> to.put(l.get(0), l.get(1)));
+      List<List<String>> from, TreeMap<BigDecimal, BigDecimal> to) {
+    from.forEach(l ->  to.put( new BigDecimal (l.get(1)), new BigDecimal (l.get(2))));
   }
 }

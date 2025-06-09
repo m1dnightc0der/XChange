@@ -11,6 +11,8 @@ import org.knowm.xchange.krakenfutures.KrakenFuturesExchange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+
 public class KrakenFuturesStreamingExchange extends KrakenFuturesExchange
     implements StreamingExchange {
 
@@ -87,7 +89,7 @@ public class KrakenFuturesStreamingExchange extends KrakenFuturesExchange
   }
 
   @Override
-  public void resubscribeChannels() {
+  public void resubscribeChannels() throws IOException {
     LOG.debug("Resubscribing channels");
     streamingService.resubscribeChannels();
   }

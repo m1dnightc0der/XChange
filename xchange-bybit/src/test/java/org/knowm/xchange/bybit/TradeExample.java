@@ -5,15 +5,22 @@ import static org.knowm.xchange.bybit.BybitExchange.SPECIFIC_PARAM_ACCOUNT_TYPE;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Collection;
+import java.util.List;
+
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeFactory;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.bybit.dto.account.walletbalance.BybitAccountType;
+import org.knowm.xchange.bybit.dto.trade.BybitOrderFlags;
+import org.knowm.xchange.bybit.dto.trade.BybitTradeParams;
 import org.knowm.xchange.bybit.service.BybitTradeService;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
+import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.Order.OrderStatus;
 import org.knowm.xchange.dto.Order.OrderType;
+import org.knowm.xchange.dto.account.OpenPositions;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
@@ -23,20 +30,77 @@ public class TradeExample {
 
   public static void main(String[] args) {
     try {
-      testTrade();
+      testOrderPlacement();
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
   }
+  public static void testOrderPlacement() throws IOException {
+    ExchangeSpecification exchangeSpecification =
+        new BybitExchange().getDefaultExchangeSpecification();
+    exchangeSpecification.setApiKey(("WcDJ1KkdlYxvaeinJ1"));
+    exchangeSpecification.setSecretKey(("SzKxwPou8IVYXdigBIIvE4O55ZWZm1msYTjK"));
+    exchangeSpecification.setExchangeSpecificParametersItem(
+        SPECIFIC_PARAM_ACCOUNT_TYPE, BybitAccountType.UNIFIED);
 
+    Exchange exchange = ExchangeFactory.INSTANCE.createExchange(
+        exchangeSpecification);
+    Instrument ETH_USDT = new CurrencyPair("ETH/USDT");
+    Instrument BTC_USDT_PERP = new FuturesContract(new CurrencyPair("BTC/USDT"), "PERP");
+    Instrument ETH_USDT_PERP = new FuturesContract(new CurrencyPair("ETH/USDT"), "PERP");
+    LimitOrder limitOrderFuture = new LimitOrder(OrderType.BID,  BigDecimal.valueOf(0.01), ETH_USDT_PERP,
+        null, null, BigDecimal.valueOf(3700));
+    limitOrderFuture.addOrderFlag(BybitOrderFlags.POST_ONLY);
+    LimitOrder limitOrderFuture2 = new LimitOrder(OrderType.BID,  BigDecimal.valueOf(0.01), ETH_USDT_PERP,
+        null, null, BigDecimal.valueOf(3301));
+
+    OpenPositions openPositions = exchange.getTradeService().getOpenPositions();
+    String limitFutureOrderId =
+        exchange.getTradeService().placeLimitOrder(limitOrderFuture);
+    String limitFutureOrderId2 =
+        exchange.getTradeService().placeLimitOrder(limitOrderFuture2);
+    System.out.println("Limit Future order id: " + limitFutureOrderId);
+    System.out.println("Limit Future order id: " + limitFutureOrderId2);
+    BybitTradeParams.BybitCancelOrderParams params = new BybitTradeParams.BybitCancelOrderParams(ETH_USDT_PERP, limitFutureOrderId);
+    BybitTradeParams.BybitCancelOrderParams params2 = new BybitTradeParams.BybitCancelOrderParams(ETH_USDT_PERP, limitFutureOrderId2);
+    List<LimitOrder> openOrders = exchange.getTradeService().getOpenOrders().getOpenOrders();
+    String[] ids = new String[openOrders.size()];
+
+    for (int i = 0; i < openOrders.size(); i++) {
+      ids[i]=openOrders.get(i).getId();
+      Collection<Order> orders = exchange.getTradeService().getOrder(openOrders.get(i).getId());
+      System.out.println("open order: " + openOrders.get(i));
+    }
+
+    Collection<Order> orders = exchange.getTradeService().getOrder(ids);
+
+
+    if (exchange.getTradeService().cancelOrder(params)) {
+      System.out.println("Cancelled id: " + limitFutureOrderId);
+    }else {
+      System.out.println("unable to cancle id: " + limitFutureOrderId);
+    }
+    if (exchange.getTradeService().cancelOrder(params2)) {
+      System.out.println("Cancelled id: " + params2.getOrderId());
+    }else {
+      System.out.println("unable to cancle id: " +  params2.getOrderId());
+    }
+    if (exchange.getTradeService().cancelOrder(params)) {
+      System.out.println("Cancelled id: " + limitFutureOrderId);
+    } else {
+      System.out.println("unable to cancle id: " + limitFutureOrderId);
+    }
+  }
   public static void testTrade() throws IOException {
     ExchangeSpecification exchangeSpecification =
         new BybitExchange().getDefaultExchangeSpecification();
-    exchangeSpecification.setApiKey(System.getProperty("test_api_key"));
-    exchangeSpecification.setSecretKey(System.getProperty("test_secret_key"));
+    exchangeSpecification.setApiKey(("WcDJ1KkdlYxvaeinJ1"));
+    exchangeSpecification.setSecretKey(("SzKxwPou8IVYXdigBIIvE4O55ZWZm1msYTjK"));
     exchangeSpecification.setExchangeSpecificParametersItem(
         SPECIFIC_PARAM_ACCOUNT_TYPE, BybitAccountType.UNIFIED);
-    exchangeSpecification.setExchangeSpecificParametersItem(USE_SANDBOX, true);
+
+
+
     Exchange exchange = ExchangeFactory.INSTANCE.createExchange(
         exchangeSpecification);
     Instrument ETH_USDT = new CurrencyPair("ETH/USDT");
@@ -108,4 +172,30 @@ public class TradeExample {
     System.out.printf("amend limit order %s%n", limitFutureOrderAmend2);
 
   }
+
+  public static void testPosition() throws IOException {
+    ExchangeSpecification exchangeSpecification =
+        new BybitExchange().getDefaultExchangeSpecification();
+
+    exchangeSpecification.setApiKey(("WcDJ1KkdlYxvaeinJ1"));
+    exchangeSpecification.setSecretKey(("SzKxwPou8IVYXdigBIIvE4O55ZWZm1msYTjK"));
+    exchangeSpecification.setExchangeSpecificParametersItem(
+        SPECIFIC_PARAM_ACCOUNT_TYPE, BybitAccountType.UNIFIED);
+    exchangeSpecification.setExchangeSpecificParametersItem(USE_SANDBOX, false);
+    Exchange exchange = ExchangeFactory.INSTANCE.createExchange(
+        exchangeSpecification);
+    Instrument ETH_USDT = new CurrencyPair("ETH/USDT");
+    Instrument BTC_USDT_PERP = new FuturesContract(new CurrencyPair("BTC/USDT"), "PERP");
+    Instrument ETH_USDT_PERP = new FuturesContract(new CurrencyPair("ETH/USDT"), "PERP");
+
+    //    System.out.printf("Tickers SPOT %s", exchange.getMarketDataService().getTickers(BybitCategory.SPOT));
+    //    System.out.printf("Tickers LINEAR %s", exchange.getMarketDataService().getTickers(BybitCategory.LINEAR));
+    //    System.out.printf("Tickers INVERSE %s", exchange.getMarketDataService().getTickers(BybitCategory.INVERSE));
+    //    System.out.printf("Tickers OPTION %s", exchange.getMarketDataService().getTickers(BybitCategory.OPTION));
+    System.out.printf("Positions: %n%s%n",
+        exchange.getTradeService().getOpenPositions());
+
+
+  }
+
 }

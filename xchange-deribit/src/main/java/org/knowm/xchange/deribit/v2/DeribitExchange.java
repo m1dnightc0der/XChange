@@ -23,14 +23,29 @@ public class DeribitExchange extends BaseExchange implements Exchange {
   public void applySpecification(ExchangeSpecification exchangeSpecification) {
 
     super.applySpecification(exchangeSpecification);
+    concludeHostParams(exchangeSpecification);
   }
 
   @Override
   protected void initServices() {
+    concludeHostParams(exchangeSpecification);
     this.marketDataService = new DeribitMarketDataService(this);
     this.accountService = new DeribitAccountService(this);
     this.tradeService = new DeribitTradeService(this);
   }
+
+  private static void concludeHostParams(ExchangeSpecification exchangeSpecification) {
+    if (exchangeSpecification.getExchangeSpecificParameters() != null) {
+      final boolean useSandbox =
+              Boolean.TRUE.equals(
+                      exchangeSpecification.getExchangeSpecificParametersItem(USE_SANDBOX));
+      if (useSandbox) {
+        exchangeSpecification.setSslUri("https://test.deribit.com/");
+        exchangeSpecification.setHost("test.deribit.com");
+      }
+    }
+  }
+
 
   @Override
   public ExchangeSpecification getDefaultExchangeSpecification() {
@@ -49,6 +64,7 @@ public class DeribitExchange extends BaseExchange implements Exchange {
     ExchangeSpecification exchangeSpecification = new ExchangeSpecification(this.getClass());
     exchangeSpecification.setSslUri("https://test.deribit.com/");
     exchangeSpecification.setHost("test.deribit.com");
+    exchangeSpecification.setExchangeSpecificParametersItem(Exchange.USE_SANDBOX, true);;
     //    exchangeSpecification.setPort(80);
     return exchangeSpecification;
   }
@@ -56,6 +72,11 @@ public class DeribitExchange extends BaseExchange implements Exchange {
   @Override
   public void remoteInit() throws IOException {
     updateExchangeMetaData();
+  }
+
+  protected boolean useSandbox() {
+    return Boolean.TRUE.equals(
+        exchangeSpecification.getExchangeSpecificParametersItem(USE_SANDBOX));
   }
 
   public void updateExchangeMetaData() throws IOException {

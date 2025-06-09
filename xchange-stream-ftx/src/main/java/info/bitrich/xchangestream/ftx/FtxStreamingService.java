@@ -135,7 +135,7 @@ public class FtxStreamingService extends JsonNettyStreamingService {
   }
 
   @Override
-  public void resubscribeChannels() {
+  public void resubscribeChannels() throws IOException {
     setLoggedInToFalse();
     super.resubscribeChannels();
   }

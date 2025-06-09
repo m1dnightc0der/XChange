@@ -9,6 +9,7 @@ import info.bitrich.xchangestream.lgo.domain.LgoOrderEvent;
 import info.bitrich.xchangestream.lgo.dto.LgoAckUpdate;
 import info.bitrich.xchangestream.lgo.dto.LgoSocketPlaceOrder;
 import info.bitrich.xchangestream.service.netty.StreamingObjectMapperHelper;
+import io.netty.channel.ChannelFuture;
 import io.reactivex.rxjava3.core.Observable;
 import java.io.IOException;
 import java.util.Collection;
@@ -16,6 +17,7 @@ import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.trade.LimitOrder;
@@ -155,7 +157,7 @@ public class LgoStreamingTradeService implements StreamingTradeService {
    *
    * @return the order reference
    */
-  public String placeMarketOrder(MarketOrder marketOrder) throws IOException {
+  public ChannelFuture placeMarketOrder(MarketOrder marketOrder) throws IOException {
     Long ref = nonceFactory.createValue();
     LgoPlaceOrder lgoOrder = LgoAdapters.adaptEncryptedMarketOrder(marketOrder);
     return placeOrder(ref, lgoOrder);
@@ -169,7 +171,7 @@ public class LgoStreamingTradeService implements StreamingTradeService {
   public String placeLimitOrder(LimitOrder limitOrder) throws IOException {
     Long ref = nonceFactory.createValue();
     LgoPlaceOrder lgoOrder = LgoAdapters.adaptLimitOrder(limitOrder);
-    return placeOrder(ref, lgoOrder);
+    return placeOrder(ref, lgoOrder).toString();
   }
 
   /**
@@ -184,7 +186,7 @@ public class LgoStreamingTradeService implements StreamingTradeService {
     return true;
   }
 
-  private String placeOrder(Long ref, LgoPlaceOrder lgoOrder) throws JsonProcessingException {
+  private ChannelFuture placeOrder(Long ref, LgoPlaceOrder lgoOrder) throws JsonProcessingException {
     LgoKey lgoKey = keyService.selectKey();
     String encryptedOrder = CryptoUtils.encryptOrder(lgoKey, lgoOrder);
     LgoOrderSignature signature = signatureService.signOrder(encryptedOrder);
@@ -192,7 +194,7 @@ public class LgoStreamingTradeService implements StreamingTradeService {
         new LgoSocketPlaceOrder(
             new LgoEncryptedOrder(lgoKey.getId(), encryptedOrder, signature, ref));
     String payload = StreamingObjectMapperHelper.getObjectMapper().writeValueAsString(placeOrder);
-    streamingService.sendMessage(payload);
-    return ref.toString();
+    return streamingService.sendMessage(payload);
+
   }
 }

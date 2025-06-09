@@ -3,6 +3,8 @@ package org.knowm.xchange.deribit.v2.service;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.stream.Collectors;
+
 import org.knowm.xchange.deribit.v2.DeribitExchange;
 import org.knowm.xchange.deribit.v2.dto.Kind;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitCurrency;
@@ -32,6 +34,7 @@ public class DeribitMarketDataServiceRaw extends DeribitBaseService {
 
   public List<DeribitCurrency> getDeribitCurrencies() throws IOException {
     return deribit.getCurrencies().getResult();
+
   }
 
   public DeribitOrderBook getDeribitOrderBook(String instrumentName, Integer depth)

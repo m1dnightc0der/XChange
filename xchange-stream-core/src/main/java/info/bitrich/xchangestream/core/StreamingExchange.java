@@ -9,6 +9,8 @@ import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 
+import java.io.IOException;
+
 public interface StreamingExchange extends Exchange {
   String ACCEPT_ALL_CERITICATES = "Accept_All_Ceriticates";
   String ENABLE_LOGGING_HANDLER = "Enable_Logging_Handler";
@@ -89,7 +91,7 @@ public interface StreamingExchange extends Exchange {
     throw new NotYetImplementedForExchangeException("messageDelay");
   }
 
-  default void resubscribeChannels() {
+  default void resubscribeChannels() throws IOException {
     throw new NotYetImplementedForExchangeException("resubscribeChannels");
   }
 

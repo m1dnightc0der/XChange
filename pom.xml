@@ -134,6 +134,7 @@
         <module>xchange-stream-coinjar</module>
         <module>xchange-stream-coinmate</module>
         <module>xchange-stream-core</module>
+        <module>xchange-stream-deribit</module>
         <module>xchange-stream-dydx</module>
         <module>xchange-stream-ftx</module>
         <module>xchange-stream-gateio</module>
@@ -265,7 +266,6 @@
                     </exclusion>
                 </exclusions>
             </dependency>
-
             <dependency>
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>

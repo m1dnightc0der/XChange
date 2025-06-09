@@ -8,48 +8,48 @@ import lombok.Builder;
 @Builder
 public class OkexOrderRequest {
   @JsonProperty("instId")
-  private String instrumentId;
+  public String instrumentId;
 
   @JsonProperty("tdMode")
-  private String tradeMode;
+  public String tradeMode;
 
   @JsonProperty("ccy")
-  private String marginCurrency;
+  public String marginCurrency;
 
-  @JsonProperty("clOrderId")
-  private String clientOrderId;
+  @JsonProperty("clOrdId")
+  public String clientOrderId;
 
   @JsonProperty("tag")
-  private String tag;
+  public String tag;
 
   @JsonProperty("side")
-  private String side;
+  public String side;
 
   @JsonProperty("posSide")
-  private String posSide;
+  public String posSide;
 
   @JsonProperty("ordType")
-  private String orderType;
+  public String orderType;
 
   @JsonProperty("sz")
-  private String amount;
+  public String amount;
 
   @JsonProperty("px")
-  private String price;
+  public String price;
 
   @JsonProperty("reduceOnly")
-  private boolean reducePosition;
+  public boolean reducePosition;
 
   @JsonProperty("slTriggerPx")
-  private String stopLossTriggerPrice;
+  public String stopLossTriggerPrice;
 
   @JsonProperty("slOrdPx")
-  private String stopLossLimitPrice;
+  public String stopLossLimitPrice;
 
   @JsonProperty("tpTriggerPx")
-  private String takeProfitTriggerPrice;
+  public String takeProfitTriggerPrice;
 
   @JsonProperty("tpOrdPx")
-  private String takeProfitLimitPrice;
+  public String takeProfitLimitPrice;
 
 }

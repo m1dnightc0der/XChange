@@ -27,6 +27,7 @@ import si.mazi.rescu.ParamsDigest;
 
 @Path("/api/v2/private")
 @Produces(MediaType.APPLICATION_JSON)
+
 public interface DeribitAuthenticated {
 
   /**
@@ -38,10 +39,12 @@ public interface DeribitAuthenticated {
    */
   @GET
   @Path("get_account_summary")
+
   DeribitResponse<AccountSummary> getAccountSummary(
       @QueryParam("currency") String currency,
       @QueryParam("extended") Boolean extended,
       @HeaderParam("Authorization") ParamsDigest auth)
+
       throws DeribitException, IOException;
 
   /**
@@ -194,6 +197,7 @@ public interface DeribitAuthenticated {
    */
   @GET
   @Path("get_open_orders_by_currency")
+
   DeribitResponse<List<Order>> getOpenOrdersByCurrency(
       @QueryParam("currency") String currency,
       @QueryParam("kind") Kind kind,
@@ -394,4 +398,10 @@ public interface DeribitAuthenticated {
   DeribitResponse<Order> getOrderState(
       @QueryParam("order_id") String orderId, @HeaderParam("Authorization") ParamsDigest auth)
       throws DeribitException, IOException;
+
+  @GET
+  @Path("get_order_state_by_label")
+  DeribitResponse<List<Order>> getOrderStateByLabel(
+          @QueryParam("label") String orderLabel, @QueryParam("currency") String currency, @HeaderParam("Authorization") ParamsDigest auth)
+          throws DeribitException, IOException;
 }

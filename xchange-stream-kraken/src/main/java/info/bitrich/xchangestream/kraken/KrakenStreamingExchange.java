@@ -186,7 +186,7 @@ public class KrakenStreamingExchange extends KrakenExchange implements Streaming
   }
 
   @Override
-  public void resubscribeChannels() {
+  public void resubscribeChannels() throws IOException{
     logger.debug("Resubscribing channels");
     streamingService.resubscribeChannels();
     if (privateStreamingService != null) privateStreamingService.resubscribeChannels();

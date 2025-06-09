@@ -1,21 +1,25 @@
-package info.bitrich.xchangestream.okex;
+package info.bitrich.xchangestream.deribit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import info.bitrich.xchangestream.okex.dto.OkexLoginMessage;
-import info.bitrich.xchangestream.okex.dto.OkexSubscribeMessage;
-import info.bitrich.xchangestream.okex.dto.OkexUnSubscribeMessage;
+import info.bitrich.xchangestream.deribit.dto.DeribitLoginMessage;
+import info.bitrich.xchangestream.deribit.dto.DeribitSubscribeMessage;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
-import info.bitrich.xchangestream.service.netty.NettyStreamingService;
 import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
-import io.reactivex.rxjava3.core.*;
+import io.reactivex.rxjava3.core.Completable;
+import io.reactivex.rxjava3.core.CompletableSource;
+import io.reactivex.rxjava3.core.Observable;
+import io.reactivex.rxjava3.core.ObservableEmitter;
 import io.reactivex.rxjava3.disposables.Disposable;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.exceptions.ExchangeException;
+
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
-import org.knowm.xchange.okex.dto.OkexInstType;
 import org.knowm.xchange.service.BaseParamsDigest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,29 +31,22 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
-import java.util.Collections;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 
-public class OkexStreamingService extends JsonNettyStreamingService {
+public class DeribitStreamingService extends JsonNettyStreamingService {
 
-  private static final Logger LOG = LoggerFactory.getLogger(OkexStreamingService.class);
-  protected final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
+  private static final Logger LOG = LoggerFactory.getLogger(DeribitStreamingService.class);
   private static final String LOGIN_SIGN_METHOD = "GET";
   private static final String LOGIN_SIGN_REQUEST_PATH = "/users/self/verify";
 
-  private static final String SUBSCRIBE = "subscribe";
-  private static final String UNSUBSCRIBE = "unsubscribe";
+  private static final String SUBSCRIBE = "public/subscribe";
+  private static final String UNSUBSCRIBE = "public/unsubscribe";
 
   public static final String TRADES = "trades";
-  public static final String ORDERBOOK = "books";
-  public static final String ORDERBOOK5 = "books5";
-
-  public static final String ORDERBOOK50 = "books50-l2-tbt";
-  public static final String FUNDING_RATE = "funding-rate";
-  public static final String TICKERS = "tickers";
-  public static final String USERTRADES = "orders";
+  public static final String TICKER = "ticker";
+  public static final String ORDERBOOK = "book";
+  public static final String USERTRADES = "user.orders";
   public boolean isLoggedIn = false;
   private final Observable<Long> pingPongSrc = Observable.interval(15, 15, TimeUnit.SECONDS);
 
@@ -57,16 +54,13 @@ public class OkexStreamingService extends JsonNettyStreamingService {
 
   private Disposable pingPongSubscription;
 
-  private ExchangeSpecification xSpec = null;
+  private final ExchangeSpecification xSpec;
 
-  public OkexStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
+  public DeribitStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
     super(apiUrl);
     this.xSpec = exchangeSpecification;
   }
 
-  ExchangeSpecification getExchangeSpecification(){
-    return this.xSpec;
-  }
   @Override public Completable connect() {
 
     LOG.debug("connect : called from {}", Thread.currentThread().getStackTrace()[2]);
@@ -100,7 +94,7 @@ isLoggedIn=false;
 
 
   @Override public void resubscribeChannels() throws IOException {
-    LOG.debug("okx resubscribeChannels : called from {}", Thread.currentThread().getStackTrace()[2]);
+    LOG.debug("deribit resubscribeChannels : called from {}", Thread.currentThread().getStackTrace()[2]);
 
     if (!isSocketOpen()) {
       connect();
@@ -125,6 +119,7 @@ isLoggedIn=false;
   }
 
 
+
   public void login() throws JsonProcessingException, ExecutionException, Exception {
     LOG.debug("login : called from {}", Thread.currentThread().getStackTrace()[2]);
     Mac mac;
@@ -142,71 +137,52 @@ isLoggedIn=false;
     String sign =
         Base64.getEncoder().encodeToString(mac.doFinal(toSign.getBytes(StandardCharsets.UTF_8)));
 
-    OkexLoginMessage message = new OkexLoginMessage();
-    String passphrase = xSpec.getExchangeSpecificParametersItem("passphrase").toString();
-    OkexLoginMessage.LoginArg loginArg =
-        new OkexLoginMessage.LoginArg(xSpec.getApiKey(), passphrase, timestamp, sign);
-    message.getArgs().add(loginArg);
+    DeribitLoginMessage message = new DeribitLoginMessage();
+        DeribitLoginMessage.LoginArg loginArg =
+        new DeribitLoginMessage.LoginArg(xSpec.getApiKey(),xSpec.getSecretKey(),"client_credentials", timestamp, sign);
+    message.setParams((loginArg));
     this.sendMessage(objectMapper.writeValueAsString(message)).sync();
 
   }
 
   @Override
-  public void messageHandler(String message) {
+  public void messageHandler(String message)  {
     LOG.debug("Received message: {}", message);
-    JsonNode jsonNode;
+    JsonNode jsonNode = null;
 
     // Parse incoming message to JSON
     try {
       jsonNode = objectMapper.readTree(message);
     } catch (IOException e) {
-      if ("pong".equals(message)) {
-        // ping pong message
+
+        if ("pong".equals(message)) {
+          // ping pong message
+          return;
+        }
+
+
+      else if(uri.getPath().toLowerCase().contains("private")) {
+        throw new RuntimeException(e);
+      } else {
+        LOG.error("Error parsing incoming message to JSON: {}", message);
         return;
       }
-      LOG.error("Error parsing incoming message to JSON: {}", message);
-      return;
     }
 
-    if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("channel-conn-count-error")) {
+    if (jsonNode!=null && jsonNode.has("event") && jsonNode.get("event").textValue().equals("channel-conn-count-error")) {
       throw new ExchangeException("Connection Count Exceeded");
     }
 
-    if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("login")) {
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("0")) {
-        isLoggedIn = true;
+    if (jsonNode!=null &&  jsonNode.has("result") && jsonNode.get("result").has("access_token")) {
+            isLoggedIn = true;
 
-        try {
-          resubscribeChannels();
-        } catch (IOException e) {
-          throw new RuntimeException(e);
-        }
-      }
+
     }
-    if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("error")) {
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("60011")) {
+    if (jsonNode!=null &&  jsonNode.has("error") && jsonNode.get("error").has("code")) {
+     // if (jsonNode.get("error").get("code").textValue().equals("13004")) {
         isLoggedIn = false;
-      }
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("60031")) {
-        isLoggedIn = false;
-      }}
-
-    if (jsonNode.has("id") && jsonNode.has("op") && jsonNode.get("op").textValue().equals("order")) {
-
-      ObservableEmitter<JsonNode> emitter = singles.get(jsonNode.get("id").asText());
-      if (emitter == null) {
-        LOG.debug("No emitter for single {}.", jsonNode.get("id"));
-        return;
-      }
-
-      //emitter.onSuccess(jsonNode);
-
-      emitter.onNext(jsonNode);
-      singles.remove(jsonNode.get("id").asText());
-      emitter.onComplete();
-
-    } else {
-
+      //}
+   }
 /*
 
 
@@ -262,12 +238,28 @@ isLoggedIn=false;
         }
       }
     }*/
-      if (processArrayMessageSeparately() && jsonNode.isArray()) {
+
+    if (jsonNode!=null && jsonNode.has("id")) {
+
+      ObservableEmitter<JsonNode> emitter = singles.get(jsonNode.get("id").asText());
+      if (emitter == null) {
+        LOG.debug("No emitter for single {}.", jsonNode.get("id"));
+        return;
+      }
+
+      //emitter.onSuccess(jsonNode);
+
+      emitter.onNext(jsonNode);
+      singles.remove(jsonNode.get("id").asText());
+      emitter.onComplete();
+
+    }else {
+      if (jsonNode!=null &&processArrayMessageSeparately() && jsonNode.isArray()) {
         // In case of array - handle every message separately.
         for (JsonNode node : jsonNode) {
           handleMessage(node);
         }
-      } else {
+      } else if (jsonNode!=null) {
 
         handleMessage(jsonNode);
       }
@@ -277,12 +269,9 @@ isLoggedIn=false;
   @Override
   protected String getChannelNameFromMessage(JsonNode message) {
     String channelName = "";
-    if (message.has("arg")) {
-      if (message.get("arg").has("channel") && message.get("arg").has("instId")) {
-        channelName = message.get("arg").get("channel").asText() + message.get("arg").get("instId").asText();
-      } else if (message.get("arg").has("channel")) {
-        channelName = message.get("arg").get("channel").asText();
-
+    if (message.has("params")) {
+      if (message.get("params").has("channel")) {
+        channelName = message.get("params").get("channel").asText();
       }
     }
     return channelName;
@@ -291,32 +280,25 @@ isLoggedIn=false;
   @Override
   public String getSubscribeMessage(String channelName, Object... args) throws IOException {
     return objectMapper.writeValueAsString(
-        new OkexSubscribeMessage(SUBSCRIBE, Collections.singletonList(getTopic(channelName))));
+        new DeribitSubscribeMessage(SUBSCRIBE, (getTopic(channelName))));
   }
 
   @Override
   public String getUnsubscribeMessage(String channelName, Object... args) throws IOException {
-    OkexSubscribeMessage.SubscriptionTopic topic = getTopic(channelName);
-    String msg = objectMapper.writeValueAsString(new OkexUnSubscribeMessage(UNSUBSCRIBE, Collections.singletonList(getTopic(channelName))));
+    String msg = objectMapper.writeValueAsString(new DeribitSubscribeMessage(UNSUBSCRIBE,(getTopic(channelName))));
     isLoggedIn=false;
     return msg;
   }
 
-  private OkexSubscribeMessage.SubscriptionTopic getTopic(String channelName) {
-    if (channelName.contains(ORDERBOOK50)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(ORDERBOOK50, null, null, channelName.replace(ORDERBOOK50, ""));
-    } else if (channelName.contains(ORDERBOOK5)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(ORDERBOOK5, null, null, channelName.replace(ORDERBOOK5, ""));
-    } else if (channelName.contains(ORDERBOOK)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(ORDERBOOK, null, null, channelName.replace(ORDERBOOK, ""));
+  private DeribitSubscribeMessage.SubscriptionTopic getTopic(String channelName) {
+     if (channelName.contains(ORDERBOOK)) {
+      return new DeribitSubscribeMessage.SubscriptionTopic( Arrays.asList(channelName ));
     } else if (channelName.contains(TRADES)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(TRADES, null, null, channelName.replace(TRADES, ""));
-    } else if (channelName.contains(TICKERS)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(TICKERS, null, null, channelName.replace(TICKERS, ""));
+      return new DeribitSubscribeMessage.SubscriptionTopic( Arrays.asList(channelName));
+     } else if (channelName.contains(TICKER)) {
+       return new DeribitSubscribeMessage.SubscriptionTopic( Arrays.asList(channelName));
     } else if (channelName.contains(USERTRADES)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(USERTRADES, OkexInstType.ANY, null, channelName.replace(USERTRADES, ""));
-    } else if (channelName.contains(FUNDING_RATE)) {
-      return new OkexSubscribeMessage.SubscriptionTopic(FUNDING_RATE, null, null, channelName.replace(FUNDING_RATE, ""));
+      return new DeribitSubscribeMessage.SubscriptionTopic(Arrays.asList(channelName));
     } else {
       throw new NotYetImplementedForExchangeException(
           "ChannelName: " + channelName + " has not implemented yet on " + this.getClass().getSimpleName());
@@ -326,8 +308,8 @@ isLoggedIn=false;
   @Override
   protected WebSocketClientHandler getWebSocketClientHandler(
       WebSocketClientHandshaker handshake, WebSocketClientHandler.WebSocketMessageHandler handler) {
-    LOG.info("Registering OkxWebSocketClientHandler");
-    return new OkxWebSocketClientHandler(handshake, handler);
+    LOG.info("Registering DeribitWebSocketClientHandler");
+    return new DeribitWebSocketClientHandler(handshake, handler);
   }
 
   public void setChannelInactiveHandler(
@@ -338,9 +320,9 @@ isLoggedIn=false;
   /**
    * Custom client handler in order to execute an external, user-provided handler on channel events.
    */
-  class OkxWebSocketClientHandler extends NettyWebSocketClientHandler {
+  class DeribitWebSocketClientHandler extends NettyWebSocketClientHandler {
 
-    public OkxWebSocketClientHandler(
+    public DeribitWebSocketClientHandler(
         WebSocketClientHandshaker handshake, WebSocketMessageHandler handler) {
       super(handshake, handler);
     }
