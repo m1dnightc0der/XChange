@@ -13,12 +13,7 @@ import org.knowm.xchange.deribit.v2.dto.DeribitResponse;
 import org.knowm.xchange.deribit.v2.dto.GrantType;
 import org.knowm.xchange.deribit.v2.dto.Kind;
 import org.knowm.xchange.deribit.v2.dto.account.DeribitAuthentication;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitCurrency;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitInstrument;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitOrderBook;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitSummary;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTicker;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTrades;
+import org.knowm.xchange.deribit.v2.dto.marketdata.*;
 
 @Path("/api/v2/public")
 @Produces(MediaType.APPLICATION_JSON)
@@ -134,6 +129,24 @@ public interface Deribit {
   @Path("ticker")
   DeribitResponse<DeribitTicker> getTicker(@QueryParam("instrument_name") String instrumentName)
       throws DeribitException, IOException;
+
+
+  /**
+   * Get candle stick for an instrument.
+   *
+   * @param instrumentName required, Instrument name
+   * @return
+   * @throws DeribitException
+   * @throws IOException
+   */
+  @GET
+  @Path("get_tradingview_chart_data")
+  DeribitResponse<DeribitCandleStick> getHistoryCandles(
+          @QueryParam("instrument_name") String instrumentName,
+          @QueryParam("start_timestamp") String after,
+          @QueryParam("end_timestamp") String before,
+          @QueryParam("resolution") String bar)
+          throws DeribitException, IOException;
 
   /**
    * Retrieve an Oauth access token, to be used for authentication of 'private' requests.

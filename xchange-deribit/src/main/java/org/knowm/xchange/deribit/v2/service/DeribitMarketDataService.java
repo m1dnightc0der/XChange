@@ -2,24 +2,32 @@ package org.knowm.xchange.deribit.v2.service;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
 import org.knowm.xchange.deribit.v2.DeribitExchange;
 import org.knowm.xchange.deribit.v2.dto.DeribitException;
+import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitCandleStick;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitOrderBook;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTicker;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTrades;
 import org.knowm.xchange.dto.Order;
+import org.knowm.xchange.dto.marketdata.CandleStickData;
 import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trades;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.marketdata.MarketDataService;
+import org.knowm.xchange.service.trade.params.CandleStickDataParams;
+import org.knowm.xchange.service.trade.params.DefaultCandleStickParam;
+import org.knowm.xchange.service.trade.params.DefaultCandleStickParamWithLimit;
 
 /**
  * Implementation of the market data service for Bitmex
@@ -66,7 +74,36 @@ public class DeribitMarketDataService extends DeribitMarketDataServiceRaw
 
     return DeribitAdapters.adaptOrderBook(deribitOrderBook);
   }
+  @Override
+  public CandleStickData getCandleStickData(Instrument instrument, CandleStickDataParams params)
+          throws IOException {
 
+    if (!(params instanceof DefaultCandleStickParam)) {
+      throw new NotYetImplementedForExchangeException("Only DefaultCandleStickParam is supported");
+    }
+    DefaultCandleStickParam defaultCandleStickParam = (DefaultCandleStickParam) params;
+    DeribitCandleStickPeriodType periodType =
+            DeribitCandleStickPeriodType.getPeriodTypeFromSecs(defaultCandleStickParam.getPeriodInSecs());
+    if (periodType == null) {
+      throw new NotYetImplementedForExchangeException(
+              "Only discrete period values are supported;"
+                      + Arrays.toString(DeribitCandleStickPeriodType.getSupportedPeriodsInSecs()));
+    }
+
+    String limit = null;
+    if (params instanceof DefaultCandleStickParamWithLimit) {
+      limit = String.valueOf(((DefaultCandleStickParamWithLimit) params).getLimit());
+    }
+
+    DeribitCandleStick historyCandle =
+            getHistoryCandle(
+                    DeribitAdapters.adaptInstrumentName(instrument),
+                    String.valueOf(defaultCandleStickParam.getStartDate().getTime()),
+                    String.valueOf(defaultCandleStickParam.getEndDate().getTime()),
+                    periodType.getFieldValue(),
+                    limit);
+    return DeribitAdapters.adaptCandleSticks(historyCandle, instrument);
+  }
   @Override
   public Trades getTrades(Instrument instrument, Object... args) throws IOException {
     String deribitInstrumentName = DeribitAdapters.adaptInstrumentName(instrument);

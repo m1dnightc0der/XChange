@@ -6,13 +6,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import org.knowm.xchange.deribit.v2.DeribitExchange;
+import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.deribit.v2.dto.Kind;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitCurrency;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitInstrument;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitOrderBook;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitSummary;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTicker;
-import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTrades;
+import org.knowm.xchange.deribit.v2.dto.marketdata.*;
 
 /**
  * Implementation of the market data service for Deribit
@@ -63,6 +59,15 @@ public class DeribitMarketDataServiceRaw extends DeribitBaseService {
     return deribit.getSummaryByInstrument(instrumentName).getResult();
   }
 
+  public DeribitCandleStick getHistoryCandle(
+          String instrumentName, String start, String end, String bar, String limit)
+          throws DeribitException, IOException {
+    return deribit.getHistoryCandles(
+            instrumentName,
+            start,
+            end,
+            bar).getResult();
+  }
   public DeribitTicker getDeribitTicker(String instrumentName) throws IOException {
     return deribit.getTicker(instrumentName).getResult();
   }

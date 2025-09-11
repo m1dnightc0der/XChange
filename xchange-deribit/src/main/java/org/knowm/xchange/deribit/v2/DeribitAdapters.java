@@ -16,10 +16,7 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.account.Balance;
 import org.knowm.xchange.dto.account.Fee;
 import org.knowm.xchange.dto.account.OpenPosition;
-import org.knowm.xchange.dto.marketdata.OrderBook;
-import org.knowm.xchange.dto.marketdata.Ticker;
-import org.knowm.xchange.dto.marketdata.Trade;
-import org.knowm.xchange.dto.marketdata.Trades;
+import org.knowm.xchange.dto.marketdata.*;
 import org.knowm.xchange.dto.meta.CurrencyMetaData;
 import org.knowm.xchange.dto.meta.FeeTier;
 import org.knowm.xchange.dto.meta.InstrumentMetaData;
@@ -34,6 +31,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
@@ -162,6 +160,30 @@ public class DeribitAdapters {
                 deribitTrades.getTrades().stream()
                         .map(trade -> adaptTrade(trade, instrument))
                         .collect(Collectors.toList()));
+    }
+
+    public static CandleStickData adaptCandleSticks(DeribitCandleStick deribitCandles, Instrument instrument) {
+        CandleStickData candleStickData = null;
+        if (deribitCandles!=null &&  deribitCandles.getTicks().size()==deribitCandles.getOpen().size() && deribitCandles.getOpen().size()==deribitCandles.getHigh().size() && deribitCandles.getHigh().size()==deribitCandles.getLow().size() && deribitCandles.getLow().size()==deribitCandles.getClose().size() && deribitCandles.getClose().size()==deribitCandles.getVolume().size() && deribitCandles.getVolume().size()==deribitCandles.getCost().size()) {
+            List<CandleStick> candleStickList = new ArrayList<>();
+
+            IntStream.range(0, deribitCandles.getTicks().size())
+
+                    .forEach(index ->
+                            candleStickList.add(
+                                    new CandleStick.Builder()
+                                            .timestamp(new Date(deribitCandles.getTicks().get(index)))
+                                            .open(deribitCandles.getOpen().get(index))
+                                            .high(deribitCandles.getHigh().get(index))
+                                            .low(deribitCandles.getLow().get(index))
+                                            .close(deribitCandles.getClose().get(index))
+                                            .volume(deribitCandles.getVolume().get(index))
+                                            .quotaVolume(deribitCandles.getCost().get(index))
+                                            .build()));
+
+            candleStickData = new CandleStickData(instrument, candleStickList);
+        }
+        return candleStickData;
     }
 
     public static Trades adaptTrades(List<DeribitTrade> deribitTrades, Instrument instrument) {
