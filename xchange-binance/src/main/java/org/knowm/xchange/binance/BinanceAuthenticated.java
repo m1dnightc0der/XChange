@@ -83,6 +83,38 @@ public interface BinanceAuthenticated extends Binance {
       @QueryParam(SIGNATURE) ParamsDigest signature)
       throws IOException, BinanceException;
 
+  @GET
+  @Path("/papi/v1/margin/allOrders ")
+  List<BinanceOrder> openPortfolioMarginOrders(
+          @QueryParam("symbol") String symbol,
+          @QueryParam("recvWindow") Long recvWindow,
+          @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+          @HeaderParam(X_MBX_APIKEY) String apiKey,
+          @QueryParam(SIGNATURE) ParamsDigest signature)
+          throws IOException, BinanceException;
+
+
+  @POST
+  @Path("papi/v1/margin/order")
+  BinanceNewOrder newPortfolioMarginOrder(
+          @FormParam("symbol") String symbol,
+          @FormParam("side") OrderSide side,
+          @FormParam("type") OrderType type,
+          @FormParam("timeInForce") TimeInForce timeInForce,
+          @FormParam("quantity") BigDecimal quantity,
+          @FormParam("quoteOrderQty") BigDecimal quoteOrderQty,
+          @FormParam("price") BigDecimal price,
+          @FormParam("newClientOrderId") String newClientOrderId,
+          @FormParam("stopPrice") BigDecimal stopPrice,
+          @FormParam("trailingDelta") Long trailingDelta,
+          @FormParam("icebergQty") BigDecimal icebergQty,
+          @FormParam("newOrderRespType") BinanceNewOrder.NewOrderResponseType newOrderRespType,
+          @FormParam("recvWindow") Long recvWindow,
+          @FormParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+          @HeaderParam(X_MBX_APIKEY) String apiKey,
+          @QueryParam(SIGNATURE) ParamsDigest signature)
+          throws IOException, BinanceException;
+
   /**
    * Send in a new margin order
    *
@@ -288,6 +320,19 @@ public interface BinanceAuthenticated extends Binance {
       @HeaderParam(X_MBX_APIKEY) String apiKey,
       @QueryParam(SIGNATURE) ParamsDigest signature)
       throws IOException, BinanceException;
+
+  @DELETE
+  @Path("papi/v1/margin/order")
+  BinanceCancelledOrder cancelPortfolioMarginOrder(
+          @QueryParam("symbol") String symbol,
+          @QueryParam("orderId") long orderId,
+          @QueryParam("origClientOrderId") String origClientOrderId,
+          @QueryParam("newClientOrderId") String newClientOrderId,
+          @QueryParam("recvWindow") Long recvWindow,
+          @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+          @HeaderParam(X_MBX_APIKEY) String apiKey,
+          @QueryParam(SIGNATURE) ParamsDigest signature)
+          throws IOException, BinanceException;
 
   /**
    * Cancel an active margin order.

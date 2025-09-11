@@ -257,14 +257,26 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                                                         });
                                                     } else {
                                                         connectionStateModel.setState(State.CLOSED);
-                                                        completable.onError(channelFuture.cause());
+
                                                         scheduleReconnect();
+                                                        if(!channels.isEmpty()) {
+                                                            resubscribeChannels();
+
+                                                            connectionStateModel.setState(State.OPEN);
+                                                            connectionSuccessEmitters.onNext(new Object());
+                                                        }
                                                     }
                                                 });
                             } catch (Exception throwable) {
                                 connectionStateModel.setState(State.CLOSED);
                                 completable.onError(throwable);
                                 scheduleReconnect();
+                                if(!channels.isEmpty()) {
+                                    resubscribeChannels();
+
+                                    connectionStateModel.setState(State.OPEN);
+                                    connectionSuccessEmitters.onNext(new Object());
+                                }
                             }
                         })
                 .doOnError(
@@ -277,6 +289,12 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                             connectionStateModel.setState(State.CLOSED);
                             reconnFailEmitters.onNext(t);
                             scheduleReconnect();
+                            if(!channels.isEmpty()) {
+                                resubscribeChannels();
+
+                                connectionStateModel.setState(State.OPEN);
+                                connectionSuccessEmitters.onNext(new Object());
+                            }
                         })
                 .doOnComplete(
                         () -> {
@@ -295,7 +313,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
             if (retry != null) {
                 LOG.info("Waiting to reconnection before " + retry);
                 Instant now = Instant.now();
-                while (retry.isBefore(now)) {
+                while (retry.isAfter(now)) {
                     try {
                         Thread.sleep(retryDuration.toMillis()/2);
                     } catch (InterruptedException e) {
@@ -324,7 +342,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                             retryDuration.toMillis(),
                             TimeUnit.MILLISECONDS);
             if (retry == null) {
-                Instant.now().plus(retryDuration);
+                retry=Instant.now().plus(retryDuration);
             }
 
         }
@@ -672,6 +690,17 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                 disconnectEmitters.onNext(new Object());
                 LOG.info("Reopening Websocket Client because it was closed! {}", ctx.channel());
                 scheduleReconnect();
+                if(!channels.isEmpty()) {
+                    try {
+                        resubscribeChannels();
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    connectionStateModel.setState(State.OPEN);
+                    connectionSuccessEmitters.onNext(new Object());
+                }
+               ;
             }
         }
 

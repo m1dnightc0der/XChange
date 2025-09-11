@@ -194,7 +194,7 @@ public interface MarketDataService extends BaseService {
    * @throws IOException - Indication that a networking error occurred while fetching JSON data
    */
   default CandleStickData getCandleStickData(
-      CurrencyPair currencyPair, CandleStickDataParams params) throws IOException {
+      Instrument instrument, CandleStickDataParams params) throws IOException {
     throw new NotYetImplementedForExchangeException("getCandleStickData");
   }
 

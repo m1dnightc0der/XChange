@@ -150,22 +150,41 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
          }
        }
       } else {
-        orderId =
-            Long.toString(
-                newOrder(
-                        order.getInstrument(),
-                        BinanceAdapters.convert(order.getType()),
-                        type,
-                        tif,
-                        order.getOriginalAmount(),
-                        quoteOrderQty,
-                        limitPrice,
-                        order.getUserReference(),
-                        stopPrice,
-                        trailingDelta,
-                        null,
-                        null)
-                    .orderId);
+        if( exchange.isPortfolioMarginEnabled()){
+          orderId =
+                  Long.toString(
+                          newPortfolioMarginOrder(
+                                  order.getInstrument(),
+                                  BinanceAdapters.convert(order.getType()),
+                                  type,
+                                  tif,
+                                  order.getOriginalAmount(),
+                                  quoteOrderQty,
+                                  limitPrice,
+                                  order.getUserReference(),
+                                  stopPrice,
+                                  trailingDelta,
+                                  null,
+                                  null)
+                                  .orderId);
+        } else {
+          orderId =
+                  Long.toString(
+                          newOrder(
+                                  order.getInstrument(),
+                                  BinanceAdapters.convert(order.getType()),
+                                  type,
+                                  tif,
+                                  order.getOriginalAmount(),
+                                  quoteOrderQty,
+                                  limitPrice,
+                                  order.getUserReference(),
+                                  stopPrice,
+                                  trailingDelta,
+                                  null,
+                                  null)
+                                  .orderId);
+        }
       }
       return orderId;
     } catch (BinanceException e) {

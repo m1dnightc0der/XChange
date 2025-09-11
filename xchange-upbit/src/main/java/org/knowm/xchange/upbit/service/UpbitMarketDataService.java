@@ -58,10 +58,10 @@ public class UpbitMarketDataService extends UpbitMarketDataServiceRaw implements
   }
 
   @Override
-  public CandleStickData getCandleStickData(CurrencyPair currencyPair, CandleStickDataParams params)
+  public CandleStickData getCandleStickData(Instrument currencyPair, CandleStickDataParams params)
       throws IOException {
 
     return UpbitAdapters.adaptCandleStickData(
-        super.getUpbitCandleStickData(currencyPair, params), currencyPair);
+        super.getUpbitCandleStickData((CurrencyPair) currencyPair, params), (CurrencyPair) currencyPair);
   }
 }

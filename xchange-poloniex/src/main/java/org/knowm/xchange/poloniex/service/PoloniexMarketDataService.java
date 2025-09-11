@@ -14,6 +14,7 @@ import org.knowm.xchange.dto.marketdata.Trades;
 import org.knowm.xchange.exceptions.CurrencyPairNotValidException;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.poloniex.PoloniexAdapters;
 import org.knowm.xchange.poloniex.PoloniexErrorAdapter;
 import org.knowm.xchange.poloniex.PoloniexUtils;
@@ -128,7 +129,7 @@ public class PoloniexMarketDataService extends PoloniexMarketDataServiceRaw
   }
 
   @Override
-  public CandleStickData getCandleStickData(CurrencyPair currencyPair, CandleStickDataParams params)
+  public CandleStickData getCandleStickData(Instrument currencyPair, CandleStickDataParams params)
       throws IOException {
     if (!(params instanceof DefaultCandleStickParam)) {
       throw new NotYetImplementedForExchangeException("Only DefaultCandleStickParam is supported");
@@ -147,11 +148,11 @@ public class PoloniexMarketDataService extends PoloniexMarketDataServiceRaw
 
       PoloniexChartData[] poloniexChartData =
           getPoloniexChartData(
-              currencyPair,
+                  (CurrencyPair) currencyPair,
               TimeUnit.MILLISECONDS.toSeconds(defaultCandleStickParam.getStartDate().getTime()),
               TimeUnit.MILLISECONDS.toSeconds(defaultCandleStickParam.getEndDate().getTime()),
               periodType);
-      return PoloniexAdapters.adaptPoloniexCandleStickData(poloniexChartData, currencyPair);
+      return PoloniexAdapters.adaptPoloniexCandleStickData(poloniexChartData, (CurrencyPair) currencyPair);
     } catch (PoloniexException e) {
       throw PoloniexErrorAdapter.adapt(e);
     }

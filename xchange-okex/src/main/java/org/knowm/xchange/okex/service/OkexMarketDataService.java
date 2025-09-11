@@ -50,7 +50,7 @@ public class OkexMarketDataService extends OkexMarketDataServiceRaw implements M
   }
 
   @Override
-  public CandleStickData getCandleStickData(CurrencyPair currencyPair, CandleStickDataParams params)
+  public CandleStickData getCandleStickData(Instrument currencyPair, CandleStickDataParams params)
       throws IOException {
 
     if (!(params instanceof DefaultCandleStickParam)) {
@@ -77,7 +77,7 @@ public class OkexMarketDataService extends OkexMarketDataServiceRaw implements M
             String.valueOf(defaultCandleStickParam.getStartDate().getTime()),
             periodType.getFieldValue(),
             limit);
-    return OkexAdapters.adaptCandleStickData(historyCandle.getData(), currencyPair);
+    return OkexAdapters.adaptCandleStickData(historyCandle.getData(), (CurrencyPair) currencyPair);
   }
 
   @Override
