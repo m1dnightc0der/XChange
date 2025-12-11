@@ -115,6 +115,32 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
+  public OkexResponse<List<OkexOrderDetails>> getOkexClientOrder(String instrumentId, String clientOrderId)
+          throws IOException {
+    try {
+      return decorateApiCall(
+              () ->
+                      okexAuthenticated.getOrderDetails(
+                              exchange.getExchangeSpecification().getApiKey(),
+                              signatureCreator,
+                              DateUtils.toUTCISODateString(new Date()),
+                              (String)
+                                      exchange
+                                              .getExchangeSpecification()
+                                              .getExchangeSpecificParametersItem(PARAM_PASSPHRASE),
+                              (String)
+                                      exchange
+                                              .getExchangeSpecification()
+                                              .getExchangeSpecificParametersItem(PARAM_SIMULATED),
+                              instrumentId,
+                              null,
+                              clientOrderId))
+              .withRateLimiter((rateLimiter(OkexAuthenticated.orderDetailsPath)))
+              .call();
+    } catch (OkexException e) {
+      throw handleError(e);
+    }
+  }
   public OkexResponse<List<OkexOrderDetails>> getOrderHistory(
       String instrumentType,
       String instrumentId,

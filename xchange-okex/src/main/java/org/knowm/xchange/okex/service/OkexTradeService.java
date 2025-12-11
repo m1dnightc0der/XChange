@@ -29,10 +29,7 @@ import org.knowm.xchange.service.trade.params.CancelOrderByInstrument;
 import org.knowm.xchange.service.trade.params.CancelOrderParams;
 import org.knowm.xchange.service.trade.params.TradeHistoryParamInstrument;
 import org.knowm.xchange.service.trade.params.TradeHistoryParams;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OpenOrdersParams;
-import org.knowm.xchange.service.trade.params.orders.OrderQueryParamInstrument;
-import org.knowm.xchange.service.trade.params.orders.OrderQueryParams;
+import org.knowm.xchange.service.trade.params.orders.*;
 
 
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
@@ -115,6 +112,7 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
 
   public Order getOrder(OrderQueryParams orderQueryParams) throws IOException {
     Order result = null;
+
     if (orderQueryParams instanceof OrderQueryParamInstrument) {
       Instrument instrument = ((OrderQueryParamInstrument) orderQueryParams).getInstrument();
       String orderId = orderQueryParams.getOrderId();
@@ -125,7 +123,20 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
       if (!orderResults.isEmpty()) {
         result = OkexAdapters.adaptOrder(orderResults.get(0), Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null);
       }
-    } else {
+    } else if (orderQueryParams instanceof ClientOrderIdQueryParamInstrument){
+      Instrument instrument = ((ClientOrderIdQueryParamInstrument) orderQueryParams).getInstrument();
+      String orderId = orderQueryParams.getOrderId();
+
+      List<OkexOrderDetails> orderResults =
+              getOkexClientOrder(OkexAdapters.adaptInstrument(instrument), orderId).getData();
+
+      if (!orderResults.isEmpty()) {
+        result = OkexAdapters.adaptOrder(orderResults.get(0), Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null);
+      }
+    }
+
+
+    else {
       throw new IOException("OrderQueryParams must implement OrderQueryParamInstrument interface.");
     }
     return result;

@@ -212,6 +212,12 @@
             <artifactId>xchange-huobi</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- XChange Hyperliquid support -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>xchange-hyperliquid</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- XChange IndependentReserve exchange support -->
         <dependency>
             <groupId>${project.groupId}</groupId>
@@ -306,6 +312,12 @@
         <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>xchange-ripple</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- XChange Stream Hyperliquid support -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>xchange-stream-hyperliquid</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

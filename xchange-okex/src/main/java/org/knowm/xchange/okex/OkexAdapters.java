@@ -85,7 +85,7 @@ return orderList;
     Instrument instrument = adaptOkexInstrumentId(order.getInstrumentId());
     return new LimitOrder(
         "buy".equals(order.getSide()) ? Order.OrderType.BID : Order.OrderType.ASK,
-        (exchangeMetaData==null ?  new BigDecimal(order.getAmount()) : convertContractSizeToVolume(
+        (( exchangeMetaData==null || exchangeMetaData.getInstruments() ==null)?  new BigDecimal(order.getAmount()) : convertContractSizeToVolume(
             order.getAmount(),
             instrument,
             exchangeMetaData.getInstruments().get(instrument).getContractValue())),

@@ -94,6 +94,7 @@
         <module>xchange-globitex</module>
         <module>xchange-hitbtc</module>
         <module>xchange-huobi</module>
+        <module>xchange-hyperliquid</module>
         <module>xchange-idex</module>
         <module>xchange-independentreserve</module>
         <module>xchange-itbit</module>
@@ -142,6 +143,7 @@
         <module>xchange-stream-gemini-v2</module>
         <module>xchange-stream-hitbtc</module>
         <module>xchange-stream-huobi</module>
+        <module>xchange-stream-hyperliquid</module>
         <module>xchange-stream-kraken</module>
         <module>xchange-stream-krakenfutures</module>
         <module>xchange-stream-kucoin</module>

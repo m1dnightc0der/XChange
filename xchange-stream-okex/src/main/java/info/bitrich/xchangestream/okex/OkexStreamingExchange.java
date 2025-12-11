@@ -33,7 +33,37 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
   public OkexStreamingExchange() {}
 
   @Override
+  public void applySpecification(ExchangeSpecification exchangeSpecification) {
+    super.applySpecification(exchangeSpecification);
+
+    // After parent initialization, ensure we have exchangeMetaData loaded
+    // This is critical for proper order/position conversion in streaming services
+    // Note: BaseExchange.applySpecification() calls remoteInit() if shouldLoadRemoteMetaData is true,
+    // but we add this check to ensure metadata is available before streaming services are created
+  }
+
+  @Override
   public Completable connect(ProductSubscription... args) {
+    // Ensure exchangeMetaData is loaded before creating streaming services
+    // This is critical for proper contract size to volume conversion on SWAP instruments
+
+    boolean needsMetadata = exchangeMetaData == null ||
+                           exchangeMetaData.getInstruments() == null ||
+                           exchangeMetaData.getInstruments().isEmpty();
+
+    if (needsMetadata) {
+      // Attempt to load metadata if not already loaded
+      try {
+        logger.info("Exchange metadata not loaded, calling remoteInit() to fetch from API");
+        remoteInit();
+      } catch (Exception e) {
+        // If remoteInit fails, warn but continue
+        // Services will work without metadata, but contract conversions will be disabled
+        logger.warn("Failed to load exchange metadata during connect. " +
+                   "Contract size conversions will be disabled. Error: {}", e.getMessage());
+      }
+    }
+
     this.streamingService = new OkexStreamingService(getApiUrl(), this.exchangeSpecification);
     this.streamingMarketDataService = new OkexStreamingMarketDataService(streamingService);
     this.streamingTradeService = new OkexStreamingTradeService(streamingService, exchangeMetaData);

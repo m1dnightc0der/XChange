@@ -44,6 +44,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -258,25 +259,38 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                                     } else {
                                                         connectionStateModel.setState(State.CLOSED);
 
-                                                        scheduleReconnect();
-                                                        if(!channels.isEmpty()) {
-                                                            resubscribeChannels();
-
-                                                            connectionStateModel.setState(State.OPEN);
-                                                            connectionSuccessEmitters.onNext(new Object());
-                                                        }
+                                                        CompletableFuture<Void> reconnectFuture = scheduleReconnect();
+                                                        reconnectFuture.thenRun(() -> {
+                                                            if(!channels.isEmpty()) {
+                                                                try {
+                                                                    resubscribeChannels();
+                                                                    connectionStateModel.setState(State.OPEN);
+                                                                    connectionSuccessEmitters.onNext(new Object());
+                                                                } catch (IOException e) {
+                                                                    LOG.error("Failed to resubscribe channels after reconnection", e);
+                                                                    throw new RuntimeException(e);
+                                                                }
+                                                            }
+                                                        });
                                                     }
                                                 });
                             } catch (Exception throwable) {
                                 connectionStateModel.setState(State.CLOSED);
                                 completable.onError(throwable);
-                                scheduleReconnect();
-                                if(!channels.isEmpty()) {
-                                    resubscribeChannels();
 
-                                    connectionStateModel.setState(State.OPEN);
-                                    connectionSuccessEmitters.onNext(new Object());
-                                }
+                                CompletableFuture<Void> reconnectFuture = scheduleReconnect();
+                                reconnectFuture.thenRun(() -> {
+                                    if(!channels.isEmpty()) {
+                                        try {
+                                            resubscribeChannels();
+                                            connectionStateModel.setState(State.OPEN);
+                                            connectionSuccessEmitters.onNext(new Object());
+                                        } catch (IOException e) {
+                                            LOG.error("Failed to resubscribe channels after reconnection", e);
+                                            throw new RuntimeException(e);
+                                        }
+                                    }
+                                });
                             }
                         })
                 .doOnError(
@@ -288,13 +302,20 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                             }
                             connectionStateModel.setState(State.CLOSED);
                             reconnFailEmitters.onNext(t);
-                            scheduleReconnect();
-                            if(!channels.isEmpty()) {
-                                resubscribeChannels();
 
-                                connectionStateModel.setState(State.OPEN);
-                                connectionSuccessEmitters.onNext(new Object());
-                            }
+                            CompletableFuture<Void> reconnectFuture = scheduleReconnect();
+                            reconnectFuture.thenRun(() -> {
+                                if(!channels.isEmpty()) {
+                                    try {
+                                        resubscribeChannels();
+                                        connectionStateModel.setState(State.OPEN);
+                                        connectionSuccessEmitters.onNext(new Object());
+                                    } catch (IOException e) {
+                                        LOG.error("Failed to resubscribe channels after reconnection", e);
+                                        throw new RuntimeException(e);
+                                    }
+                                }
+                            });
                         })
                 .doOnComplete(
                         () -> {
@@ -307,44 +328,73 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         });
     }
 
-    private void scheduleReconnect() {
-        if (autoReconnect) {
-            LOG.info("Scheduling reconnection");
-            if (retry != null) {
-                LOG.info("Waiting to reconnection before " + retry);
-                Instant now = Instant.now();
-                while (retry.isAfter(now)) {
-                    try {
-                        Thread.sleep(retryDuration.toMillis()/2);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
+    private CompletableFuture<Void> scheduleReconnect() {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+
+        if (!autoReconnect) {
+            future.complete(null);
+            return future;
+        }
+
+        scheduleReconnectWithRetry(future);
+        return future;
+    }
+
+    private void scheduleReconnectWithRetry(CompletableFuture<Void> future) {
+        LOG.info("Scheduling reconnection");
+
+        if (retry != null) {
+            LOG.info("Waiting to reconnection before " + retry);
+            Instant now = Instant.now();
+            while (retry.isAfter(now)) {
+                try {
+                    Thread.sleep(retryDuration.toMillis()/2);
+                } catch (InterruptedException e) {
+                    future.completeExceptionally(e);
+                    return;
                 }
-                retry = null;
+                now = Instant.now();
             }
-            webSocketChannel
-                    .eventLoop()
-                    .schedule(
-                            () ->
+            retry = null;
+        }
 
-                                    connect()
-                                            .subscribe(
-                                                    () -> {
-                                                        LOG.info("Reconnection complete");
-                                                        retry = Instant.now().plus(retryDuration);
-                                                    },
-                                                    e -> {
-                                                        LOG.error("Reconnection failed: {}", e.getMessage());
-                                                        retry = Instant.now().plus(retryDuration);
+        if (webSocketChannel == null || webSocketChannel.eventLoop().isShutdown()) {
+            LOG.warn("Cannot schedule reconnect: event loop unavailable");
+            future.completeExceptionally(new IllegalStateException("Event loop unavailable"));
+            return;
+        }
+
+        webSocketChannel
+                .eventLoop()
+                .schedule(
+                        () -> {
+                            connect()
+                                    .subscribe(
+                                            () -> {
+                                                LOG.info("Reconnection complete");
+                                                retry = Instant.now().plus(retryDuration);
+                                                future.complete(null);
+                                            },
+                                            e -> {
+                                                LOG.error("Reconnection failed: {}, will retry", e.getMessage());
+                                                retry = Instant.now().plus(retryDuration);
+
+                                                // Don't complete the future, just retry
+                                                if (!future.isDone()) {
+                                                    try {
                                                         Thread.sleep(retryDuration.toMillis());
-                                                        throw e;
-                                                    }),
-                            retryDuration.toMillis(),
-                            TimeUnit.MILLISECONDS);
-            if (retry == null) {
-                retry=Instant.now().plus(retryDuration);
-            }
+                                                        scheduleReconnectWithRetry(future);
+                                                    } catch (InterruptedException ie) {
+                                                        future.completeExceptionally(ie);
+                                                    }
+                                                }
+                                            });
+                        },
+                        retryDuration.toMillis(),
+                        TimeUnit.MILLISECONDS);
 
+        if (retry == null) {
+            retry = Instant.now().plus(retryDuration);
         }
     }
 
@@ -419,16 +469,16 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
 
     public synchronized ChannelFuture sendMessage(String message) {
         LOG.debug("Sending message: {} called from {}", message, Thread.currentThread().getStackTrace()[2]);
-        if (!message.equals("ping")) {
+        if (!message.contains("ping")) {
             LOG.debug("Non ping message: {}", message);
         }
         if (!isSocketOpen()) {
-            LOG.warn("WebSocket is not open! Call connect first.");
+            LOG.warn("WebSocket is not open! Call connect first. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
 
         if (!webSocketChannel.isWritable()) {
-            LOG.warn("Cannot send data to WebSocket as it is not writable.");
+            LOG.warn("Cannot send data to WebSocket as it is not writable. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
         if (message != null) {
@@ -689,18 +739,22 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                 super.channelInactive(ctx);
                 disconnectEmitters.onNext(new Object());
                 LOG.info("Reopening Websocket Client because it was closed! {}", ctx.channel());
-                scheduleReconnect();
-                if(!channels.isEmpty()) {
-                    try {
-                        resubscribeChannels();
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
 
-                    connectionStateModel.setState(State.OPEN);
-                    connectionSuccessEmitters.onNext(new Object());
-                }
-               ;
+                CompletableFuture<Void> reconnectFuture = scheduleReconnect();
+
+                // Wait for reconnection to complete, then resubscribe
+                reconnectFuture.thenRun(() -> {
+                    if(!channels.isEmpty()) {
+                        try {
+                            resubscribeChannels();
+                            connectionStateModel.setState(State.OPEN);
+                            connectionSuccessEmitters.onNext(new Object());
+                        } catch (IOException e) {
+                            LOG.error("Failed to resubscribe channels after reconnection", e);
+                            throw new RuntimeException(e);
+                        }
+                    }
+                });
             }
         }
 
