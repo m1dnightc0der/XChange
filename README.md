@@ -15,6 +15,7 @@ XChange is a Java based library providing a simple and consistent API for intera
 
 Basic usage is very simple: Create an `Exchange` instance, get the appropriate service, and request data. More complex usages are progressively detailed below.
 
+
 ## REST API
 #### Public Market Data
 
