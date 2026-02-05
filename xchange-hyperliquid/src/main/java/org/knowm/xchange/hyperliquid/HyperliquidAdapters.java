@@ -1,12 +1,19 @@
 package org.knowm.xchange.hyperliquid;
 
+import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.Order;
+import org.knowm.xchange.dto.account.Balance;
+import org.knowm.xchange.dto.account.OpenPosition;
+import org.knowm.xchange.dto.account.Wallet;
 import org.knowm.xchange.dto.marketdata.*;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.OpenOrders;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidAssetPosition;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidPositionData;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidAllMids;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidCandleSnapshot;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidL2Book;
@@ -183,14 +190,38 @@ public class HyperliquidAdapters {
 
         switch (state.toLowerCase()) {
             case "open":
-            case "untriggered":
+            case "triggered":
                 return Order.OrderStatus.OPEN;
             case "filled":
                 return Order.OrderStatus.FILLED;
             case "rejected":
+            case "margincanceled":
+            case "tickrejected":
+            case "mintradentlrejected":
+            case "perpmarginrejected":
+            case "reduceonlyrejected":
+            case "badalopxrejected":
+            case "ioccancelrejected":
+            case "badtriggerpxrejected":
+            case "marketordernoliquidityrejected":
+            case "positionincreaseatopeninterestcaprejected":
+            case "positionflipatopeninterestcaprejected":
+            case "tooaggressiveatopeninterestcaprejected":
+            case "openinterestincreaserejected":
+            case "insufficientspotbalancerejected":
+            case "oraclerejected":
+            case "perpmaxpositionrejected":
                 return Order.OrderStatus.REJECTED;
             case "cancelled":
             case "canceled":
+            case "vaultwithdrawalcanceled":
+            case "openinterestcapcanceled":
+            case "selftradecanceled":
+            case "reduceonlycanceled":
+            case "siblingfilledcanceled":
+            case "delistedcanceled":
+            case "liquidatedcanceled":
+            case "scheduledcancel":
                 return Order.OrderStatus.CANCELED;
             case "archive":
             default:
@@ -439,6 +470,110 @@ public class HyperliquidAdapters {
         return fills.stream()
                 .map(HyperliquidAdapters::adaptUserTrade)
                 .collect(Collectors.toList());
+    }
+
+    // ========== Account Info Adapters ==========
+
+    /**
+     * Adapt Hyperliquid clearinghouse state to XChange Wallet.
+     * Creates a wallet with USD balance based on account value and withdrawable amount.
+     *
+     * @param state The Hyperliquid clearinghouse state
+     * @return XChange Wallet with balance and MMR information
+     */
+    public static Wallet adaptWallet(HyperliquidClearinghouseState state) {
+        if (state == null || state.getMarginSummary() == null) {
+            return null;
+        }
+
+        BigDecimal accountValue = new BigDecimal(state.getMarginSummary().getAccountValue());
+        BigDecimal withdrawable = state.getWithdrawable() != null
+                ? new BigDecimal(state.getWithdrawable())
+                : BigDecimal.ZERO;
+        BigDecimal marginUsed = state.getMarginSummary().getTotalMarginUsed() != null
+                ? new BigDecimal(state.getMarginSummary().getTotalMarginUsed())
+                : BigDecimal.ZERO;
+
+        // Calculate MMR: crossMaintenanceMarginUsed / marginSummary.accountValue
+        BigDecimal mmr = null;
+        if (state.getCrossMaintenanceMarginUsed() != null && accountValue.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal crossMaintenanceMarginUsed = new BigDecimal(state.getCrossMaintenanceMarginUsed());
+            mmr = crossMaintenanceMarginUsed.divide(accountValue, 8, java.math.RoundingMode.HALF_UP);
+        }
+
+        // Create USD balance with account value as total, withdrawable as available
+        Balance usdBalance = new Balance(
+                Currency.USD,
+                accountValue,
+                withdrawable,
+                marginUsed
+        );
+
+        return new Wallet.Builder()
+                .id("trading")
+                .name("trading")
+                .balances(Collections.singletonList(usdBalance))
+                .features(Collections.singleton(Wallet.WalletFeature.FUTURES_TRADING))
+                .mmr(mmr)
+                .build();
+    }
+
+    /**
+     * Adapt Hyperliquid asset positions to XChange OpenPositions.
+     *
+     * @param state The Hyperliquid clearinghouse state
+     * @return Collection of XChange OpenPositions
+     */
+    public static Collection<OpenPosition> adaptOpenPositions(HyperliquidClearinghouseState state) {
+        if (state == null || state.getAssetPositions() == null) {
+            return Collections.emptyList();
+        }
+
+        return state.getAssetPositions().stream()
+                .map(HyperliquidAdapters::adaptOpenPosition)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Adapt a single Hyperliquid asset position to XChange OpenPosition.
+     *
+     * @param assetPosition The Hyperliquid asset position
+     * @return XChange OpenPosition
+     */
+    public static OpenPosition adaptOpenPosition(HyperliquidAssetPosition assetPosition) {
+        if (assetPosition == null || assetPosition.getPosition() == null) {
+            return null;
+        }
+
+        HyperliquidPositionData pos = assetPosition.getPosition();
+
+        // Parse size - negative means short, positive means long
+        BigDecimal size = new BigDecimal(pos.getSzi());
+        OpenPosition.Type type = size.compareTo(BigDecimal.ZERO) >= 0
+                ? OpenPosition.Type.LONG
+                : OpenPosition.Type.SHORT;
+
+        // Convert coin to instrument
+        Instrument instrument = adaptInstrument(pos.getCoin());
+
+        // Parse other fields
+        BigDecimal entryPrice = pos.getEntryPx() != null ? new BigDecimal(pos.getEntryPx()) : null;
+        BigDecimal liquidationPrice = pos.getLiquidationPx() != null ? new BigDecimal(pos.getLiquidationPx()) : null;
+        BigDecimal unrealizedPnl = pos.getUnrealizedPnl() != null ? new BigDecimal(pos.getUnrealizedPnl()) : null;
+        BigDecimal notionalValue = pos.getPositionValue() != null ? new BigDecimal(pos.getPositionValue()) : null;
+
+
+
+        return new OpenPosition.Builder()
+                .instrument(instrument)
+                .type(type)
+                .size(type.equals(OpenPosition.Type.SHORT)?size.abs().negate() : size.abs())
+                .price(entryPrice)
+                .liquidationPrice(liquidationPrice)
+                .notionalValue(type.equals(OpenPosition.Type.SHORT) ? notionalValue.abs().negate() : notionalValue.abs())
+                .unRealisedPnl(unrealizedPnl)
+                .build();
     }
 
 }

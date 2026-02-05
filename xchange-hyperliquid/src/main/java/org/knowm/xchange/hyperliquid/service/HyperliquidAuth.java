@@ -23,8 +23,61 @@ import java.security.SecureRandom;
 import java.util.*;
 
 /**
- * HyperliquidAuth generates EIP-712 signatures for Hyperliquid L1 actions
- * Based on the sign_l1_action method from the Hyperliquid Python SDK
+ * HyperliquidAuth generates EIP-712 signatures for Hyperliquid L1 actions.
+ *
+ * <p>This class implements the Hyperliquid authentication protocol, which uses EIP-712
+ * structured data signing for all trading operations. It supports both personal account
+ * trading and vault trading through a unified authentication mechanism.</p>
+ *
+ * <h2>Vault Trading Support</h2>
+ * <p>To trade on behalf of a vault, configure the vault address when creating the exchange:</p>
+ * <pre>
+ * ExchangeSpecification spec = new HyperliquidExchange().getDefaultExchangeSpecification();
+ * spec.setSecretKey("0x...");  // Your private key
+ * spec.setExchangeSpecificParametersItem("vaultAddress", "0x...");  // Vault address
+ * </pre>
+ *
+ * <p>When a vault address is configured:</p>
+ * <ul>
+ *   <li>The vault address is cryptographically bound to the signature (included in action hash)</li>
+ *   <li>The vault address is sent in the API request body</li>
+ *   <li>All operations execute on the vault instead of your personal account</li>
+ * </ul>
+ *
+ * <h2>Supported Operations</h2>
+ * <p>All methods using {@link #signL1Action(Map, long, Long)} automatically support vault addresses:</p>
+ * <ul>
+ *   <li>Place orders - {@code placeOrderRaw()} (REST), {@code placeLimitOrder()} (WebSocket)</li>
+ *   <li>Modify orders - {@code modifyOrderRaw()} (REST)</li>
+ *   <li>Cancel orders - {@code cancel()}, {@code cancelByCloid()} (REST)</li>
+ * </ul>
+ *
+ * <h2>Signature Algorithm</h2>
+ * <p>The signing process follows the Hyperliquid protocol:</p>
+ * <ol>
+ *   <li>Serialize action with MessagePack</li>
+ *   <li>Create action hash: keccak256(msgpack(action) + nonce + vault_flag + vault_address)</li>
+ *   <li>Construct phantom agent with action hash</li>
+ *   <li>Sign using EIP-712 structured data signature</li>
+ * </ol>
+ *
+ * <p>The vault flag and address are included in the action hash calculation:</p>
+ * <pre>
+ * if (vaultAddress == null) {
+ *     buffer.put((byte) 0x00);  // No vault
+ * } else {
+ *     buffer.put((byte) 0x01);  // Vault present
+ *     buffer.put(hexToBytes(vaultAddress));  // 20-byte address
+ * }
+ * </pre>
+ *
+ * <h2>Thread Safety</h2>
+ * <p>This class is thread-safe. Multiple threads can safely call {@link #signL1Action}
+ * concurrently. Each invocation generates a unique nonce using the provided nonce factory.</p>
+ *
+ * @see org.knowm.xchange.hyperliquid.HyperliquidAdapters#createSignedRequestBody
+ * @see org.knowm.xchange.hyperliquid.service.HyperliquidTradeServiceRaw
+ * @see info.bitrich.xchangestream.hyperliquid.HyperliquidStreamingTradeService
  */
 public class HyperliquidAuth extends BaseParamsDigest {
     
@@ -73,21 +126,76 @@ public class HyperliquidAuth extends BaseParamsDigest {
         return keccak256(buffer.array());
     }
 
-    private HyperliquidAuth(String privateKeyHex, SynchronizedValueFactory<Long> nonce, 
+    /**
+     * Private constructor for HyperliquidAuth.
+     *
+     * <p>Use {@link #createHyperliquidAuth} factory method to create instances.</p>
+     *
+     * @param privateKeyHex Private key in hex format (with or without 0x prefix)
+     * @param nonce Nonce factory for generating unique nonces
+     * @param isMainnet True for mainnet, false for testnet
+     * @param vaultAddress Optional vault address (null for personal account trading)
+     * @param walletAddress Optional wallet address (null to auto-derive from private key)
+     */
+    private HyperliquidAuth(String privateKeyHex, SynchronizedValueFactory<Long> nonce,
                            boolean isMainnet, String vaultAddress,String walletAddress) {
         super(privateKeyHex, HMAC_SHA_256); // Dummy algorithm, we override digestParams
         // Normalize private key format (remove 0x prefix if present)
         this.privateKeyHex = privateKeyHex.startsWith("0x") ? privateKeyHex.substring(2) : privateKeyHex;
         this.nonce = nonce;
         this.isMainnet = isMainnet;
+
+        // Validate vault address format if provided
+        if (vaultAddress != null && !vaultAddress.isEmpty()) {
+            if (!vaultAddress.matches("^0x[a-fA-F0-9]{40}$")) {
+                throw new IllegalArgumentException(
+                    "Invalid vault address format: " + vaultAddress +
+                    ". Must be 0x followed by 40 hexadecimal characters (e.g., 0x0f0d9105b88e938df7816b23e7ad4d1660568a0e)"
+                );
+            }
+        }
+
         this.vaultAddress = vaultAddress;
         this.walletAddress=walletAddress;
         this.msgPackMapper = new ObjectMapper(new MessagePackFactory());
     }
 
-    public static HyperliquidAuth createHyperliquidAuth(String privateKeyHex, 
+    /**
+     * Factory method to create a HyperliquidAuth instance.
+     *
+     * <h3>Vault Trading Configuration</h3>
+     * <p>To enable vault trading, provide the vault address parameter:</p>
+     * <pre>
+     * HyperliquidAuth auth = HyperliquidAuth.createHyperliquidAuth(
+     *     privateKey,
+     *     nonceFactory,
+     *     true,  // mainnet
+     *     "0x0f0d9105b88e938df7816b23e7ad4d1660568a0e",  // vault address
+     *     "0x..."  // wallet address
+     * );
+     * </pre>
+     *
+     * <p>For personal account trading, pass null for vaultAddress:</p>
+     * <pre>
+     * HyperliquidAuth auth = HyperliquidAuth.createHyperliquidAuth(
+     *     privateKey,
+     *     nonceFactory,
+     *     true,  // mainnet
+     *     null,  // no vault
+     *     "0x..."  // wallet address
+     * );
+     * </pre>
+     *
+     * @param privateKeyHex Private key in hex format (with or without 0x prefix)
+     * @param nonce Nonce factory for generating unique nonces
+     * @param isMainnet True for mainnet, false for testnet
+     * @param vaultAddress Optional vault address for trading on behalf of a vault (null for personal account)
+     * @param walletAddress Optional wallet address (null to auto-derive from private key)
+     * @return HyperliquidAuth instance, or null if privateKeyHex is null
+     */
+    public static HyperliquidAuth createHyperliquidAuth(String privateKeyHex,
                                                        SynchronizedValueFactory<Long> nonce,
-                                                       boolean isMainnet, 
+                                                       boolean isMainnet,
                                                        String vaultAddress,String walletAddress) {
         return privateKeyHex == null ? null : 
             new HyperliquidAuth(privateKeyHex, nonce, isMainnet, vaultAddress,walletAddress);
@@ -584,8 +692,13 @@ public class HyperliquidAuth extends BaseParamsDigest {
     }
 
     /**
-     * Get vault address if configured
-     * @return Vault address or null if not configured
+     * Get vault address if configured for vault trading.
+     *
+     * <p>Returns the vault address that was configured when creating this HyperliquidAuth instance.
+     * When a vault address is present, all signed operations will execute on behalf of the vault
+     * instead of the personal account.</p>
+     *
+     * @return Vault address (0x + 40 hex characters), or null if trading on personal account
      */
     public String getVaultAddress() {
         return vaultAddress;

@@ -12,18 +12,26 @@ import org.knowm.xchange.okex.OkexExchange;
 
 public class OkexStreamingExchange extends OkexExchange implements StreamingExchange {
   // Production URIs
-  public static final String WS_PUBLIC_CHANNEL_URI = "wss://ws.okx.com:8443/ws/v5/public";
-  public static final String WS_PRIVATE_CHANNEL_URI = "wss://ws.okx.com:8443/ws/v5/private";
+  public static final String WS_PUBLIC_URI="wss://ws.okx.com:8443";
+  public static final String WS_PUBLIC_PATH = "/ws/v5/public";
+  public static final String WS_PRIVATE_URI = "wss://ws.okx.com:8443";
+  public static final String WS_PRIVATE_PATH = "/ws/v5/private";
+  public static final String AWS_WS_PUBLIC_URI = "wss://wsaws.okx.com:8443";
 
-  public static final String AWS_WS_PUBLIC_CHANNEL_URI = "wss://wsaws.okx.com:8443/ws/v5/public";
-  public static final String AWS_WS_PRIVATE_CHANNEL_URI = "wss://wsaws.okx.com:8443/ws/v5/private";
+  public static final String AWS_WS_PUBLIC_PATH = "/ws/v5/public";
+  public static final String AWS_WS_PRIVATE_URI = "wss://wsaws.okx.com:8443";
+
+  public static final String AWS_WS_PRIVATE_PATH = "/ws/v5/private";
 
   // Demo(Sandbox) URIs
-  public static final String SANDBOX_WS_PUBLIC_CHANNEL_URI =
-      "wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999";
-  public static final String SANDBOX_WS_PRIVATE_CHANNEL_URI =
-      "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999";
-
+  public static final String SANDBOX_WS_PUBLIC_URI =
+      "wss://wspap.okx.com:8443";
+  public static final String SANDBOX_WS_PUBLIC_PATH =
+          "/ws/v5/public?brokerId=9999";
+  public static final String SANDBOX_WS_PRIVATE_URI =
+      "wss://wspap.okx.com:8443";
+  public static final String SANDBOX_WS_PRIVATE_PATH =
+          "/ws/v5/private?brokerId=9999";
   private OkexStreamingService streamingService;
 
   private OkexStreamingMarketDataService streamingMarketDataService;
@@ -66,7 +74,11 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
 
     this.streamingService = new OkexStreamingService(getApiUrl(), this.exchangeSpecification);
     this.streamingMarketDataService = new OkexStreamingMarketDataService(streamingService);
-    this.streamingTradeService = new OkexStreamingTradeService(streamingService, exchangeMetaData);
+    this.streamingTradeService = new OkexStreamingTradeService(
+        streamingService,
+        exchangeMetaData,
+        getInstrumentCodeMap()
+    );
 
     return streamingService.connect();
   }
@@ -75,7 +87,12 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
     String apiUrl;
     ExchangeSpecification exchangeSpec = getExchangeSpecification();
     if (exchangeSpec.getOverrideWebsocketApiUri() != null) {
-      return exchangeSpec.getOverrideWebsocketApiUri();
+
+      apiUrl =
+              (this.exchangeSpecification.getApiKey() == null)
+                      ? exchangeSpec.getOverrideWebsocketApiUri()+WS_PUBLIC_PATH
+                      : exchangeSpec.getOverrideWebsocketApiUri()+WS_PRIVATE_PATH;
+      return apiUrl;
     }
 
     boolean userAws =
@@ -83,13 +100,13 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
     if (useSandbox()) {
       apiUrl =
           (this.exchangeSpecification.getApiKey() == null)
-              ? SANDBOX_WS_PUBLIC_CHANNEL_URI
-              : SANDBOX_WS_PRIVATE_CHANNEL_URI;
+              ? SANDBOX_WS_PUBLIC_URI+SANDBOX_WS_PUBLIC_PATH
+              : SANDBOX_WS_PRIVATE_URI+SANDBOX_WS_PRIVATE_PATH;
     } else {
       apiUrl =
           (this.exchangeSpecification.getApiKey() == null)
-              ? userAws ? AWS_WS_PUBLIC_CHANNEL_URI : WS_PUBLIC_CHANNEL_URI
-              : userAws ? AWS_WS_PRIVATE_CHANNEL_URI : WS_PRIVATE_CHANNEL_URI;
+              ? userAws ? AWS_WS_PUBLIC_URI+AWS_WS_PUBLIC_PATH : WS_PUBLIC_URI+WS_PUBLIC_PATH
+              : userAws ? AWS_WS_PRIVATE_URI+AWS_WS_PRIVATE_PATH: WS_PRIVATE_URI+WS_PRIVATE_PATH;
     }
     return apiUrl;
   }

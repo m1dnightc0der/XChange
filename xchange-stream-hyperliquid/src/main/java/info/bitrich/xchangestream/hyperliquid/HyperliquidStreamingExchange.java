@@ -47,7 +47,7 @@ public class HyperliquidStreamingExchange extends HyperliquidExchange implements
               exchangeSpecification.getSecretKey(),
               nonceFactory,
               !useSandbox(), // isMainnet
-              (String) exchangeSpecification.getExchangeSpecificParametersItem("vaultAddress"), (String) exchangeSpecification.getExchangeSpecificParametersItem("wallet")
+              (String) exchangeSpecification.getExchangeSpecificParametersItem("vault"), (String) exchangeSpecification.getExchangeSpecificParametersItem("wallet")
           );
 
       // Create metadata loader using the info API with REST endpoint
@@ -148,5 +148,54 @@ public class HyperliquidStreamingExchange extends HyperliquidExchange implements
     if (streamingService != null) {
       streamingService.setChannelInactiveHandler(channelInactiveHandler);
     }
+  }
+
+  /**
+   * Set the vault address for trading on behalf of a vault.
+   *
+   * <p>This is a convenience method that sets the vaultAddress parameter in the exchange specification.
+   * Must be called before {@link #connect()} to take effect.</p>
+   *
+   * <p>When a vault address is configured, all trading operations will execute on behalf of the vault
+   * instead of your personal account. You must be the vault leader or have permission to trade on the vault.</p>
+   *
+   * <h3>Example Usage</h3>
+   * <pre>
+   * HyperliquidStreamingExchange exchange = new HyperliquidStreamingExchange();
+   * ExchangeSpecification spec = exchange.getDefaultExchangeSpecification();
+   * spec.setSecretKey("0x...");
+   * exchange.applySpecification(spec);
+   * exchange.setVaultAddress("0x0f0d9105b88e938df7816b23e7ad4d1660568a0e");
+   * exchange.connect().blockingAwait();
+   * </pre>
+   *
+   * @param vaultAddress Vault address (0x + 40 hex characters)
+   * @throws IllegalArgumentException if the vault address format is invalid
+   * @see #getVaultAddress()
+   */
+  public void setVaultAddress(String vaultAddress) {
+    // Validate format
+    if (vaultAddress != null && !vaultAddress.isEmpty()) {
+      if (!vaultAddress.matches("^0x[a-fA-F0-9]{40}$")) {
+        throw new IllegalArgumentException(
+            "Invalid vault address format: " + vaultAddress +
+            ". Must be 0x followed by 40 hexadecimal characters."
+        );
+      }
+    }
+    exchangeSpecification.setExchangeSpecificParametersItem("vault", vaultAddress);
+  }
+
+  /**
+   * Get the configured vault address.
+   *
+   * <p>Returns the vault address that was configured for this exchange instance.
+   * Returns null if no vault address is configured (personal account trading).</p>
+   *
+   * @return Vault address, or null if not configured
+   * @see #setVaultAddress(String)
+   */
+  public String getVaultAddress() {
+    return (String) exchangeSpecification.getExchangeSpecificParametersItem("vaultAddress");
   }
 }

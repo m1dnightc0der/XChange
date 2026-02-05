@@ -96,7 +96,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
         }
 
 
-        if (jsonNode != null && jsonNode.has("channel") && !jsonNode.get("channel").asText().equals("post")) {
+        if (jsonNode != null && jsonNode.has("channel") && !jsonNode.get("channel").asText().equals("post") && !jsonNode.get("channel").asText().equals("pong")) {
             handleMessage(jsonNode);
         } else if (jsonNode != null && jsonNode.has("channel") && jsonNode.get("channel").asText().equals("post") && jsonNode.has("data") && jsonNode.get("data").has("id")) {
             // Handle subscription responses
@@ -108,7 +108,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
             emitter.onNext(jsonNode);
             singles.remove(jsonNode.get("data").get("id").asText());
             emitter.onComplete();
-        } else if (jsonNode != null) {
+        } else if (jsonNode != null && !jsonNode.get("channel").asText().equals("pong")) {
             handleMessage(jsonNode);
         }
     }
@@ -136,7 +136,8 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
                 channelName = message.get("channel").asText() + "." + message.get("data").get("user").asText().toLowerCase();
             } else if (message.has("channel") && (message.get("channel").asText().equals("userEvents") || message.get("channel").asText().equals("userFills") || message.get("channel").asText().equals("orderUpdates"))) {
                 if(exchangeSpecification!=null && exchangeSpecification.getExchangeSpecificParameters().get("wallet")!=null) {
-                    channelName = message.get("channel").asText() + "." + exchangeSpecification.getExchangeSpecificParameters().get("wallet").toString().toLowerCase();
+                    channelName = message.get("channel").asText() + "." + ((exchangeSpecification.getExchangeSpecificParameters().get("vault")!=null ? exchangeSpecification.getExchangeSpecificParameters().get("vault") : exchangeSpecification.getExchangeSpecificParameters().get("wallet"))
+).toString().toLowerCase();
                 } else{
                     channelName = message.get("channel").asText();
                 }

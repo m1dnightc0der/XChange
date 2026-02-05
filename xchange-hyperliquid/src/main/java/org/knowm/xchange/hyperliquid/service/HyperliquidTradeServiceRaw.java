@@ -6,6 +6,7 @@ import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
 import org.knowm.xchange.hyperliquid.dto.Response;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
 import org.knowm.xchange.hyperliquid.dto.trade.Fill;
 import org.knowm.xchange.hyperliquid.dto.trade.Order;
 
@@ -33,7 +34,7 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         if(exchange.getExchangeSpecification().getExchangeSpecificParameters().containsKey("wallet")) {
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("type", "frontendOpenOrders");
-            requestBody.put("user", exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet"));
+            requestBody.put("user", (exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault")!=null ? exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault") : exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet")));
             requestBody.put("dex", ""); // Default perp dex
 
             return hyperliquidInfo.getOpenOrders(
@@ -58,7 +59,7 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         if(exchange.getExchangeSpecification().getExchangeSpecificParameters().containsKey("wallet")) {
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("type", "orderStatus");
-            requestBody.put("user", exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet"));
+            requestBody.put("user", (exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault")!=null ? exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault") : exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet")));
             requestBody.put("oid", orderId);
 
             Object rawResponse = hyperliquidInfo.queryPublic(
@@ -92,7 +93,7 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
             try {
                 Map<String, Object> requestBody = new LinkedHashMap<>();
                 requestBody.put("type", "userFillsByTime");
-                requestBody.put("user", exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet"));
+                requestBody.put("user", (exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault")!=null ? exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault") : exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet")));
                 requestBody.put("startTime", startTime);
                 requestBody.put("endTime", endTime);
                 requestBody.put("aggregateByTime", aggregateByTime);
@@ -139,6 +140,56 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
      * @return Response from the exchange (result can be Map or String depending on success/error)
      * @throws IOException if the request fails
      */
+
+
+    public HyperliquidResponse cancelByCloid(String name, String cloid) throws IOException {
+        // Create cancel wire in Hyperliquid format with short field names
+        // Matches Python SDK bulk_cancel structure (lines 277-283)
+        Map<String, Object> cancelWire = new LinkedHashMap<>();
+        cancelWire.put("asset", getAssetIndex(name));  // asset index
+        cancelWire.put("cloid", cloid);              // order ID
+
+        // Create action wrapper
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "cancelByCloid");
+        action.put("cancels", java.util.Arrays.asList(cancelWire));
+
+        // Generate nonce (timestamp in milliseconds)
+        long nonce = System.currentTimeMillis();
+        Long expiresAfter = null; // Can be set if needed
+
+        // Generate signature for the action
+        // Matches Python SDK's sign_l1_action call
+        // Returns Map with {"r": "0x...", "s": "0x...", "v": int}
+        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
+
+        // Create main request body matching Python's _post_action structure:
+        // { "action": action, "nonce": nonce, "signature": {"r": "0x...", "s": "0x...", "v": int}, "vaultAddress": vault, "expiresAfter": expires }
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("action", action);
+        requestBody.put("nonce", nonce);
+        requestBody.put("signature", signature);
+
+        // Add vault address if configured (matching Python: None for certain action types like "usdClassTransfer", "sendAsset")
+
+
+
+        if (hyperliquidAuth != null && hyperliquidAuth.getVaultAddress() != null) {
+            requestBody.put("vaultAddress", hyperliquidAuth.getVaultAddress());
+        } else {
+            requestBody.put("vaultAddress", null);
+        }
+
+        // Add expiresAfter
+        requestBody.put("expiresAfter", expiresAfter);
+
+
+
+        return hyperliquidAuthenticated.cancelOrder(
+                "application/json",
+                requestBody
+        );
+    }
     public HyperliquidResponse cancel(String name, String orderId) throws IOException {
         // Create cancel wire in Hyperliquid format with short field names
         // Matches Python SDK bulk_cancel structure (lines 277-283)
@@ -201,6 +252,40 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
                 "application/json",
                 requestBody
         );
+    }
+
+    /**
+     * Get clearinghouse state (perpetuals account summary) for the configured wallet.
+     * Uses the public /info endpoint - no authentication required.
+     *
+     * @return HyperliquidClearinghouseState containing positions, margin summaries, etc.
+     * @throws IOException if the request fails
+     */
+    public HyperliquidClearinghouseState getClearinghouseState() throws IOException {
+        String walletAddress = (String) (exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault")!=null ? exchange.getExchangeSpecification().getExchangeSpecificParameters().get("vault") : exchange.getExchangeSpecification().getExchangeSpecificParameters().get("wallet"));
+
+        if (walletAddress == null || walletAddress.isEmpty()) {
+            throw new IllegalStateException("Wallet address not configured. " +
+                    "Set 'wallet' in exchange specific parameters.");
+        }
+
+        return getClearinghouseState(walletAddress);
+    }
+
+    /**
+     * Get clearinghouse state (perpetuals account summary) for a specific wallet address.
+     * Uses the public /info endpoint - no authentication required.
+     *
+     * @param userAddress The user's wallet address in 42-character hexadecimal format
+     * @return HyperliquidClearinghouseState containing positions, margin summaries, etc.
+     * @throws IOException if the request fails
+     */
+    public HyperliquidClearinghouseState getClearinghouseState(String userAddress) throws IOException {
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("type", "clearinghouseState");
+        requestBody.put("user", userAddress);
+
+        return hyperliquidInfo.getClearinghouseState("application/json", requestBody);
     }
 
     /**
@@ -308,15 +393,17 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
 
         // Create modify wire structure
         // Matches Python: {"oid": orderId, "order": orderWire}
-        Map<String, Object> modifyWire = new LinkedHashMap<>();
-        modifyWire.put("oid", orderId);
-        modifyWire.put("order", orderWire);
+       // Map<String, Object> modifyWire = new LinkedHashMap<>();
+       // modifyWire.put("oid", orderId);
+       // modifyWire.put("order", orderWire);
 
         // Create batchModify action
         // Matches Python SDK bulk_modify_orders_new (lines 183-196)
         Map<String, Object> action = new LinkedHashMap<>();
-        action.put("type", "batchModify");
-        action.put("modifies", java.util.Arrays.asList(modifyWire));
+        action.put("type", "modify");
+        action.put("oid", ((orderId instanceof Cloid) ?   ((Cloid) orderId).toRaw() : orderId));
+        action.put("order", orderWire);
+        //action.put(java.util.Arrays.asList(modifyWire));
 
         // Generate nonce (timestamp in milliseconds)
         long nonce = System.currentTimeMillis();

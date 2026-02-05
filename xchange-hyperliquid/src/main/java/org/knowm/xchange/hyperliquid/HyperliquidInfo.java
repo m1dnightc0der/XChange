@@ -3,6 +3,7 @@ package org.knowm.xchange.hyperliquid;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidMeta;
 import org.knowm.xchange.hyperliquid.dto.trade.Order;
 import si.mazi.rescu.ParamsDigest;
@@ -103,6 +104,20 @@ public interface HyperliquidInfo {
     @POST
     @Consumes(MediaType.APPLICATION_JSON)
     HyperliquidMeta getMeta(
+        @HeaderParam("Content-Type") String contentType,
+        Map<String, Object> requestBody
+    ) throws IOException;
+
+    /**
+     * Get user's clearinghouse state (perpetuals account summary)
+     * @param contentType Content type header
+     * @param requestBody Request containing type="clearinghouseState" and user address
+     * @return Clearinghouse state with positions, margin summary, etc.
+     * @throws IOException
+     */
+    @POST
+    @Consumes(MediaType.APPLICATION_JSON)
+    HyperliquidClearinghouseState getClearinghouseState(
         @HeaderParam("Content-Type") String contentType,
         Map<String, Object> requestBody
     ) throws IOException;

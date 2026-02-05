@@ -1,7 +1,7 @@
 package org.knowm.xchange.hyperliquid.service;
 
-import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.dto.Order;
+import org.knowm.xchange.dto.account.OpenPosition;
 import org.knowm.xchange.dto.account.OpenPositions;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
@@ -12,11 +12,10 @@ import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
-import org.knowm.xchange.hyperliquid.dto.Response;
+import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
 import org.knowm.xchange.hyperliquid.dto.trade.Fill;
 import org.knowm.xchange.hyperliquid.dto.trade.HyperliquidTradeParams;
 import org.knowm.xchange.hyperliquid.dto.trade.PlaceOrderResponse;
-import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.trade.TradeService;
 import org.knowm.xchange.service.trade.params.CancelOrderByIdParams;
 import org.knowm.xchange.service.trade.params.CancelOrderByInstrument;
@@ -29,7 +28,6 @@ import org.knowm.xchange.service.trade.params.orders.OrderQueryParams;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -95,8 +93,8 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
         if (rawResponse != null && rawResponse.isSuccess()) {
             PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
             if (orderData != null && orderData.getData() != null &&
-                orderData.getData().getStatuses() != null &&
-                !orderData.getData().getStatuses().isEmpty()) {
+                    orderData.getData().getStatuses() != null &&
+                    !orderData.getData().getStatuses().isEmpty()) {
 
                 PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
                 Long orderId = status.getOrderId();
@@ -147,7 +145,8 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
             oid = Long.parseLong(orderId);
         } catch (NumberFormatException e) {
             // If not numeric, treat as client order ID (hexadecimal string)
-            oid = HyperliquidAdapters.adaptUserReferenceToCoid(orderId).toRaw();
+            oid = HyperliquidAdapters.adaptUserReferenceToCoid(orderId);
+
         }
 
         // Modify the order using raw API
@@ -163,15 +162,12 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
         );
 
 
-
-
-
         // Check if response indicates success and extract order ID
         if (rawResponse != null && rawResponse.isSuccess()) {
             PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
             if (orderData != null && orderData.getData() != null &&
-                orderData.getData().getStatuses() != null &&
-                !orderData.getData().getStatuses().isEmpty()) {
+                    orderData.getData().getStatuses() != null &&
+                    !orderData.getData().getStatuses().isEmpty()) {
 
                 PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
                 Long newOrderId = status.getOrderId();
@@ -183,6 +179,8 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 } else {
                     throw new IOException("Order modification failed: no order ID returned");
                 }
+            } else if (orderData.getType() != null) {
+                return null;
             } else {
                 throw new IOException("Order modification failed: invalid response structure");
             }
@@ -202,9 +200,12 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
 
     private boolean cancelOrder(String orderId, String symbol) throws IOException {
 
-
-
-        HyperliquidResponse response = super.cancel(symbol, orderId);
+        HyperliquidResponse response;
+        if (orderId.matches("\\d+")) {
+            response = super.cancel(symbol, orderId);
+        } else {
+            response = super.cancelByCloid(symbol, orderId);
+        }
         if (response != null && response.getStatus().equals("err")) {
             throw new IOException((response.getResult() != null ? response.getResult().toString() : "Failed to cancel order ID " + orderId));
         }
@@ -232,12 +233,12 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
             HyperliquidTradeParams.HyperliquidCancelOrderParams hyperliquidCancelOrderParams = (HyperliquidTradeParams.HyperliquidCancelOrderParams) params;
             String id = ((CancelOrderByIdParams) params).getOrderId();
             String instrumentId = hyperliquidCancelOrderParams.getInstrument().getBase().toString();
-            return cancelOrder(id,instrumentId);
+            return cancelOrder(id, instrumentId);
         } else if (params instanceof CancelOrderByIdParams && params instanceof CancelOrderByInstrument) {
 
             String id = ((CancelOrderByIdParams) params).getOrderId();
             String instrumentId = ((CancelOrderByInstrument) params).getInstrument().getBase().toString();
-            return cancelOrder(id,instrumentId);
+            return cancelOrder(id, instrumentId);
 
 
         } else {
@@ -259,7 +260,9 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
 
     @Override
     public OpenPositions getOpenPositions() throws IOException {
-        throw new NotYetImplementedForExchangeException("getOpenPositions not yet implemented");
+        HyperliquidClearinghouseState state = getClearinghouseState();
+        Collection<OpenPosition> positions = HyperliquidAdapters.adaptOpenPositions(state);
+        return new OpenPositions(new ArrayList<>(positions));
     }
 
     @Override
@@ -293,8 +296,9 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (xchangeOrder.getCumulativeAmount().compareTo(BigDecimal.ZERO) != 0) {
                     List<Fill> fills = getFillsByTime(xchangeOrder.getTimestamp().getTime(), (new Date()).getTime()).stream()
                             .filter(fill -> xchangeOrder.getId().equals(fill.getOrderId().toString()))
-                            .collect(Collectors.toList());;
-                    if(!fills.isEmpty()) {
+                            .collect(Collectors.toList());
+                    ;
+                    if (!fills.isEmpty()) {
                         // Calculate weighted average price
                         BigDecimal totalValue = fills.stream()
                                 .map(fill -> fill.getPriceAsBigDecimal().multiply(fill.getSizeAsBigDecimal()))
@@ -338,8 +342,9 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (xchangeOrder.getCumulativeAmount().compareTo(BigDecimal.ZERO) != 0) {
                     List<Fill> fills = getFillsByTime(xchangeOrder.getTimestamp().getTime(), (new Date()).getTime()).stream()
                             .filter(fill -> xchangeOrder.getId().equals(fill.getOrderId().toString()))
-                            .collect(Collectors.toList());;
-                    if(!fills.isEmpty()) {
+                            .collect(Collectors.toList());
+                    ;
+                    if (!fills.isEmpty()) {
                         // Calculate weighted average price
                         BigDecimal totalValue = fills.stream()
                                 .map(fill -> fill.getPriceAsBigDecimal().multiply(fill.getSizeAsBigDecimal()))
@@ -370,8 +375,6 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
         }
         return orders;
     }
-
-
 
 
     @Override

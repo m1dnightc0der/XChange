@@ -5,7 +5,9 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.junit.Assert;
 import org.junit.Before;
@@ -49,7 +51,12 @@ public class OkexPublicDataIntegration {
               assertThat(instrumentMetaData.getPriceScale()).isGreaterThanOrEqualTo(0);
               assertThat(instrumentMetaData.getVolumeScale()).isNotNull();
               if (instrument1 instanceof FuturesContract) {
-                assertThat(instrument1.getCounter()).isEqualTo(Currency.USDT);
+                // OKX supports both linear (USDT) and inverse (USD) perpetuals
+                // Linear contracts: BTC-USDT-SWAP (counter = USDT)
+                // Inverse contracts: BTC-USD-SWAP (counter = USD)
+                Currency counter = instrument1.getCounter();
+                assertTrue("FuturesContract counter should be USDT or USD",
+                    counter.equals(Currency.USDT) || counter.equals(Currency.USD));
               }
             });
   }
@@ -119,5 +126,58 @@ public class OkexPublicDataIntegration {
     assertThat(OkexAdapters.adaptOkexInstrumentId("BTC-USDT"))
         .isEqualTo(new CurrencyPair("BTC/USDT"));
     assertThat(OkexAdapters.adaptInstrument(new CurrencyPair("BTC/USDT"))).isEqualTo("BTC-USDT");
+  }
+
+  @Test
+  public void xchangeInverseFuturesInstrumentMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new FuturesContract(CurrencyPair.BTC_USD, "260206");
+    Integer instIdCode = OkexAdapters.adaptInstrumentCode(instrument, map);
+    assertThat(instIdCode).isEqualTo(245697);
+  }
+
+  @Test
+  public void xchangeLinearFuturesInstrumentMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new FuturesContract(CurrencyPair.ETH_USDT, "260327");
+    Integer instIdCode = OkexAdapters.adaptInstrumentCode(instrument, map);
+    assertThat(instIdCode).isEqualTo(227100);
+  }
+
+  @Test
+  public void xchangeSpotInstrumentMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new CurrencyPair("HYPE", "USDT");
+    Integer instIdCode = OkexAdapters.adaptInstrumentCode(instrument, map);
+    assertThat(instIdCode).isEqualTo(234453);
+  }
+
+  @Test
+  public void xchangeLinearSwapInstrumentMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new FuturesContract(CurrencyPair.BTC_USDT, "SWAP");
+    Integer instIdCode = OkexAdapters.adaptInstrumentCode(instrument, map);
+    assertThat(instIdCode).isEqualTo(10459);
+  }
+
+  @Test
+  public void xchangeInverseSwapInstrumentMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new FuturesContract(CurrencyPair.BTC_USD, "SWAP");
+    Integer instIdCode = OkexAdapters.adaptInstrumentCode(instrument, map);
+    assertThat(instIdCode).isEqualTo(10458);
+  }
+
+  @Test(expected = IllegalArgumentException.class)
+  public void xchangeInvalidSwapInstrumentNotMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    Instrument instrument = new FuturesContract(new CurrencyPair("DMC", "USDT"), "SWAP");
+    OkexAdapters.adaptInstrumentCode(instrument, map);
+  }
+
+  @Test(expected = IllegalArgumentException.class)
+  public void xchangeNullInstrumentNotMappedToOkxInstIdCode() {
+    Map<String, Integer> map = ((OkexExchange) exchange).getInstrumentCodeMap();
+    OkexAdapters.adaptInstrumentCode(null, map);
   }
 }

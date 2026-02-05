@@ -27,10 +27,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class OkexStreamingService extends JsonNettyStreamingService {
 
@@ -50,7 +52,9 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   public static final String FUNDING_RATE = "funding-rate";
   public static final String TICKERS = "tickers";
   public static final String USERTRADES = "orders";
+  public static final String USERFILLS = "fills";
   public boolean isLoggedIn = false;
+  private final AtomicReference<CompletableFuture<Void>> loginFuture = new AtomicReference<>();
   private final Observable<Long> pingPongSrc = Observable.interval(15, 15, TimeUnit.SECONDS);
 
   private WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler = null;
@@ -70,7 +74,8 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   @Override public Completable connect() {
 
     LOG.debug("connect : called from {}", Thread.currentThread().getStackTrace()[2]);
-isLoggedIn=false;
+    isLoggedIn = false;
+    loginFuture.set(null);  // Reset login future on new connection
     pingPongDisconnectIfConnected();
     Completable conn = super.connect();
 
@@ -106,10 +111,10 @@ isLoggedIn=false;
       connect();
     }
     if (xSpec.getApiKey() != null && !isLoggedIn) {
-      LOG.debug("connect: loging in");
+      LOG.debug("connect: logging in");
 
       try {
-        login();
+        login().get(10, TimeUnit.SECONDS);
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
@@ -125,8 +130,27 @@ isLoggedIn=false;
   }
 
 
-  public void login() throws JsonProcessingException, ExecutionException, Exception {
+  public CompletableFuture<Void> login() throws JsonProcessingException, ExecutionException, Exception {
     LOG.debug("login : called from {}", Thread.currentThread().getStackTrace()[2]);
+
+    // If already logged in, return completed future
+    if (isLoggedIn) {
+      return CompletableFuture.completedFuture(null);
+    }
+
+    // If login is already in progress, return existing future
+    CompletableFuture<Void> existingFuture = loginFuture.get();
+    if (existingFuture != null && !existingFuture.isDone()) {
+      return existingFuture;
+    }
+
+    // Create new login future
+    CompletableFuture<Void> newFuture = new CompletableFuture<>();
+    if (!loginFuture.compareAndSet(existingFuture, newFuture)) {
+      // Another thread beat us, return their future
+      return loginFuture.get();
+    }
+
     Mac mac;
     try {
       mac = Mac.getInstance(BaseParamsDigest.HMAC_SHA_256);
@@ -135,7 +159,8 @@ isLoggedIn=false;
               xSpec.getSecretKey().getBytes(StandardCharsets.UTF_8), BaseParamsDigest.HMAC_SHA_256);
       mac.init(secretKey);
     } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-      throw new ExchangeException("Invalid API secret", e);
+      newFuture.completeExceptionally(new ExchangeException("Invalid API secret", e));
+      return newFuture;
     }
     String timestamp = String.valueOf(System.currentTimeMillis() / 1000);
     String toSign = timestamp + LOGIN_SIGN_METHOD + LOGIN_SIGN_REQUEST_PATH;
@@ -149,6 +174,7 @@ isLoggedIn=false;
     message.getArgs().add(loginArg);
     this.sendMessage(objectMapper.writeValueAsString(message)).sync();
 
+    return newFuture;
   }
 
   @Override
@@ -169,12 +195,32 @@ isLoggedIn=false;
     }
 
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("channel-conn-count-error")) {
-      throw new ExchangeException("Connection Count Exceeded");
+      LOG.warn("OKX connection count limit exceeded, will reconnect after delay");
+
+      // Propagate error to pending operations
+      ExchangeException error = new ExchangeException("Connection count limit exceeded, reconnecting...");
+      propagateErrorToSingles(error);
+
+      // Set retry delay to respect OKX's 3 connections/second rate limit
+      setRetryDelay(Duration.ofSeconds(1));
+
+      // Disconnect to trigger auto-reconnect with the delay
+      disconnect().subscribe(
+          () -> LOG.info("Disconnected after connection count error, will auto-reconnect"),
+          e -> LOG.error("Error disconnecting after connection count error: {}", e.getMessage())
+      );
+      return;
     }
 
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("login")) {
       if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("0")) {
         isLoggedIn = true;
+
+        // Complete the login future
+        CompletableFuture<Void> future = loginFuture.get();
+        if (future != null) {
+          future.complete(null);
+        }
 
         try {
           resubscribeChannels();
@@ -184,12 +230,34 @@ isLoggedIn=false;
       }
     }
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("error")) {
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("60011")) {
+      String errorCode = jsonNode.has("code") ? jsonNode.get("code").textValue() : "unknown";
+      String errorMsg = jsonNode.has("msg") ? jsonNode.get("msg").textValue() : "Unknown error";
+
+      // Handle authentication errors
+      if (errorCode.equals("60011") || errorCode.equals("60031")) {
         isLoggedIn = false;
+
+        // Complete any pending login future exceptionally
+        CompletableFuture<Void> future = loginFuture.get();
+        if (future != null && !future.isDone()) {
+          future.completeExceptionally(new ExchangeException("Login failed: " + errorMsg + " (code: " + errorCode + ")"));
+        }
+
+        // Propagate error to all pending single emitters
+        propagateErrorToSingles(new ExchangeException("Authentication error: " + errorMsg + " (code: " + errorCode + ")"));
+
+        // Trigger re-login for subsequent requests
+        try {
+          loginFuture.set(null);  // Reset so login() creates a new future
+          login();  // Attempt re-login
+        } catch (Exception e) {
+          LOG.warn("Failed to re-login after auth error: {}", e.getMessage());
+        }
+      } else {
+        // For other errors, also propagate to singles
+        propagateErrorToSingles(new ExchangeException("OKX error: " + errorMsg + " (code: " + errorCode + ")"));
       }
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("60031")) {
-        isLoggedIn = false;
-      }}
+    }
 
     if (jsonNode.has("id") && jsonNode.has("op") && jsonNode.get("op").textValue().equals("order")) {
 
@@ -274,6 +342,24 @@ isLoggedIn=false;
     }
   }
 
+  /**
+   * Propagate an error to all waiting single emitters.
+   * This ensures that pending orders receive error feedback instead of timing out.
+   */
+  private void propagateErrorToSingles(Throwable error) {
+    for (Map.Entry<String, ObservableEmitter<JsonNode>> entry : singles.entrySet()) {
+      ObservableEmitter<JsonNode> emitter = entry.getValue();
+      if (emitter != null && !emitter.isDisposed()) {
+        try {
+          emitter.onError(error);
+        } catch (Exception e) {
+          LOG.debug("Error propagating error to emitter {}: {}", entry.getKey(), e.getMessage());
+        }
+      }
+    }
+    singles.clear();
+  }
+
   @Override
   protected String getChannelNameFromMessage(JsonNode message) {
     String channelName = "";
@@ -290,6 +376,13 @@ isLoggedIn=false;
 
   @Override
   public String getSubscribeMessage(String channelName, Object... args) throws IOException {
+    if (channelName.equals(USERTRADES) || channelName.equals(USERFILLS)) {
+      try {
+        login().get(10, TimeUnit.SECONDS);
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
     return objectMapper.writeValueAsString(
         new OkexSubscribeMessage(SUBSCRIBE, Collections.singletonList(getTopic(channelName))));
   }
@@ -351,7 +444,13 @@ isLoggedIn=false;
     }
 
     @Override public void channelInactive(ChannelHandlerContext ctx) {
-      isLoggedIn=false;
+      isLoggedIn = false;
+      // Cancel any pending login future
+      CompletableFuture<Void> future = loginFuture.get();
+      if (future != null && !future.isDone()) {
+        future.completeExceptionally(new ExchangeException("Connection closed"));
+      }
+      loginFuture.set(null);
       pingPongDisconnectIfConnected();
       super.channelInactive(ctx);
       if (channelInactiveHandler != null) {

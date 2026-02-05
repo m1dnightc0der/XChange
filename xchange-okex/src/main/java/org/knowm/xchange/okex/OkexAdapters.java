@@ -125,13 +125,29 @@ return orderList;
 
   public static OkexOrderRequest adaptOrder(
       MarketOrder order, ExchangeMetaData exchangeMetaData, String accountLevel) {
+    return adaptOrder(order, exchangeMetaData, accountLevel, null, false);
+  }
+
+  public static OkexOrderRequest adaptOrder(
+      MarketOrder order,
+      ExchangeMetaData exchangeMetaData,
+      String accountLevel,
+      Map<String, Integer> instrumentCodeMap,
+      Boolean useInstIdCode) {
+
+    String instrumentId;
+    if (Boolean.TRUE.equals(useInstIdCode) && instrumentCodeMap != null) {
+      Integer instIdCode = adaptInstrumentCode(order.getInstrument(), instrumentCodeMap);
+      instrumentId = instIdCode.toString();
+    } else {
+      instrumentId = adaptInstrument(order.getInstrument());
+    }
+
     return OkexOrderRequest.builder()
-        .instrumentId(adaptInstrument(order.getInstrument()))
+        .instrumentId(instrumentId)
         .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
         .side(adaptSide(order.getType()))
-        .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")// PosSide should come as a input from an extended LimitOrder class to
-        // support Futures/Swap capabilities of Okex, till then it should be null to
-        // perform "net" orders
+        .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")
         .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
         .clientOrderId(order.getUserReference())
         .orderType(OkexOrderType.market.name())
@@ -139,41 +155,54 @@ return orderList;
         .build();
   }
   public static OkexOrderRequest adaptOrder(StopOrder order, ExchangeMetaData exchangeMetaData) {
-    if (order.getIntention() != null && order.getIntention().equals(StopOrder.Intention.TAKE_PROFIT)) {
+    return adaptOrder(order, exchangeMetaData, "1", null, false);
+  }
 
-      return OkexOrderRequest.builder().instrumentId(adaptInstrument(order.getInstrument()))
-          .tradeMode(order.hasFlag(OkexOrderFlags.CROSS_MARGIN) ? "cross" : (order.getInstrument() instanceof CurrencyPair ? "cash" : "isolated"))
-          .side(adaptSide(order.getType())).posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")
-          // support Futures/Swap capabilities of Okex, till then it should be null to
-          // perform "net" orders
+  public static OkexOrderRequest adaptOrder(
+      StopOrder order,
+      ExchangeMetaData exchangeMetaData,
+      String accountLevel,
+      Map<String, Integer> instrumentCodeMap,
+      Boolean useInstIdCode) {
+
+    String instrumentId;
+    if (Boolean.TRUE.equals(useInstIdCode) && instrumentCodeMap != null) {
+      Integer instIdCode = adaptInstrumentCode(order.getInstrument(), instrumentCodeMap);
+      instrumentId = instIdCode.toString();
+    } else {
+      instrumentId = adaptInstrument(order.getInstrument());
+    }
+
+    if (order.getIntention() != null && order.getIntention().equals(StopOrder.Intention.TAKE_PROFIT)) {
+      return OkexOrderRequest.builder()
+          .instrumentId(instrumentId)
+          .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
+          .side(adaptSide(order.getType()))
+          .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : "net")
           .clientOrderId(order.getUserReference())
           .takeProfitLimitPrice(order.getLimitPrice().toString())
           .takeProfitTriggerPrice(order.getStopPrice().toString())
-          // we only want to set this if it is set
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
           .orderType(OkexOrderType.conditional.name())
-          //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
-          .amount(order.getOriginalAmount().toString()).build();
-
-
+          .amount(exchangeMetaData == null ? order.getOriginalAmount().toString() :
+              convertVolumeToContractSize(order, exchangeMetaData))
+          .build();
     } else {
-      return OkexOrderRequest.builder().instrumentId(adaptInstrument(order.getInstrument()))
-          .tradeMode(order.hasFlag(OkexOrderFlags.CROSS_MARGIN) ? "cross" : (order.getInstrument() instanceof CurrencyPair ? "cash" : "isolated"))
-          .side(adaptSide(order.getType())).posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ?
-              adaptPosSide(order.getType()) :
+      return OkexOrderRequest.builder()
+          .instrumentId(instrumentId)
+          .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
+          .side(adaptSide(order.getType()))
+          .posSide(order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) :
               (order.getInstrument() instanceof CurrencyPair ? null : "net"))
-          // support Futures/Swap capabilities of Okex, till then it should be null to
-          // perform "net" orders
           .clientOrderId(order.getUserReference())
           .stopLossLimitPrice(order.getLimitPrice().toString())
           .stopLossTriggerPrice(order.getStopPrice().toString())
           .orderType(OkexOrderType.conditional.name())
-          // we only want to set this if it is set
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
-          //  .orderType((order.hasFlag(OkexOrderFlags.POST_ONLY)) ? OkexOrderType.post_only.name() : OkexOrderType.limit.name())
-          .amount(order.getOriginalAmount().toString()).build();
+          .amount(exchangeMetaData == null ? order.getOriginalAmount().toString() :
+              convertVolumeToContractSize(order, exchangeMetaData))
+          .build();
     }
-
   }
 
   /**
@@ -208,19 +237,36 @@ return orderList;
 
   public static OkexOrderRequest adaptOrder(
       LimitOrder order, ExchangeMetaData exchangeMetaData, String accountLevel) {
+    return adaptOrder(order, exchangeMetaData, accountLevel, null, false);
+  }
+
+  public static OkexOrderRequest adaptOrder(
+      LimitOrder order,
+      ExchangeMetaData exchangeMetaData,
+      String accountLevel,
+      Map<String, Integer> instrumentCodeMap,
+      Boolean useInstIdCode) {
+
+    String instrumentId;
+    if (Boolean.TRUE.equals(useInstIdCode) && instrumentCodeMap != null) {
+      Integer instIdCode = adaptInstrumentCode(order.getInstrument(), instrumentCodeMap);
+      instrumentId = instIdCode.toString();
+    } else {
+      instrumentId = adaptInstrument(order.getInstrument());
+    }
+
     return OkexOrderRequest.builder()
-        .instrumentId(adaptInstrument(order.getInstrument()))
+        .instrumentId(instrumentId)
         .tradeMode(adaptTradeMode(order.getInstrument(), accountLevel))
         .side(adaptSide(order.getType()))
         .posSide(
-            order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) : (order.getInstrument() instanceof CurrencyPair ? null : "net")) // PosSide should come as a input from an extended LimitOrder class to
-        // support Futures/Swap capabilities of Okex, till then it should be null to
-        // perform "net" orders
+            order.hasFlag(OkexOrderFlags.LONG_SHORT) ? adaptPosSide(order.getType()) :
+                (order.getInstrument() instanceof CurrencyPair ? null : "net"))
         .clientOrderId(order.getUserReference())
         .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
-        .orderType(adaptOrderType(order.getOrderFlags(),order.getInstrument()))
-
-        .amount(exchangeMetaData==null ?order.getOriginalAmount().toString() :  convertVolumeToContractSize(order, exchangeMetaData))
+        .orderType(adaptOrderType(order.getOrderFlags(), order.getInstrument()))
+        .amount(exchangeMetaData==null ? order.getOriginalAmount().toString() :
+            convertVolumeToContractSize(order, exchangeMetaData))
         .price(order.getLimitPrice().toString())
         .build();
   }
@@ -351,6 +397,47 @@ return orderList;
     return instrument.toString().replace('/', '-');
   }
 
+  /**
+   * Builds a map of instrument IDs to their corresponding OKEx instIdCode values.
+   * The instIdCode is used for WebSocket order operations to reduce latency.
+   * Uses String keys (OKX format like "BTC-USDT-SWAP") to avoid HashMap identity issues.
+   *
+   * @param instruments List of OKEx instruments
+   * @return Map of instrumentId (String) to instIdCode (Integer)
+   */
+  public static Map<String, Integer> buildInstrumentCodeMap(List<OkexInstrument> instruments) {
+    Map<String, Integer> instrumentCodeMap = new HashMap<>();
+    for (OkexInstrument instrument : instruments) {
+      if (instrument.getInstIdCode() != null) {
+        instrumentCodeMap.put(instrument.getInstrumentId(), instrument.getInstIdCode());
+      }
+    }
+    return instrumentCodeMap;
+  }
+
+  /**
+   * Converts an XChange Instrument to its corresponding OKEx instIdCode.
+   * The instIdCode is used for WebSocket order operations to reduce latency.
+   *
+   * @param instrument The instrument to convert
+   * @param instrumentCodeMap Map containing instrumentId (String) to instIdCode mappings
+   * @return The instIdCode for the instrument
+   * @throws IllegalArgumentException if instrument is null or not found in the map
+   */
+  public static Integer adaptInstrumentCode(Instrument instrument, Map<String, Integer> instrumentCodeMap) {
+    if (instrument == null) {
+      throw new IllegalArgumentException("Instrument cannot be null");
+    }
+
+    String instrumentId = adaptInstrument(instrument);
+    Integer instIdCode = instrumentCodeMap.get(instrumentId);
+    if (instIdCode == null) {
+      throw new IllegalArgumentException("Instrument not found in metadata: " + instrument + " (instrumentId: " + instrumentId + ")");
+    }
+
+    return instIdCode;
+  }
+
   public static Trades adaptTrades(List<OkexTrade> okexTrades, Instrument instrument) {
     List<Trade> trades = new ArrayList<>();
 
@@ -478,6 +565,7 @@ return orderList;
     return Wallet.Builder.from(balances)
         .id(TRADING_WALLET_ID)
         .features(new HashSet<>(Collections.singletonList(Wallet.WalletFeature.TRADING)))
+            .mmr(((!okexWalletBalanceList.isEmpty() && okexWalletBalanceList.get(0)!=null && okexWalletBalanceList.get(0).getMarginRatio()!=null && !okexWalletBalanceList.get(0).getMarginRatio().isEmpty()) ? new BigDecimal(okexWalletBalanceList.get(0).getMarginRatio()) : null))
         .build();
   }
 
@@ -541,15 +629,23 @@ return orderList;
                         .liquidationPrice(okexPosition.getLiquidationPrice())
                         .price(okexPosition.getAverageOpenPrice())
                         .type(adaptOpenPositionType(okexPosition))
-                        .size(
+                            .notionalValue(adaptOpenPositionType(okexPosition).equals(OpenPosition.Type.SHORT) ? okexPosition.getNotionalUsd().abs().negate() : okexPosition.getNotionalUsd().abs())
+                        .size(adaptOpenPositionType(okexPosition).equals(OpenPosition.Type.SHORT) ?
                             okexPosition
                                 .getPosition()
-                                .abs()
+                                .abs().negate()
                                 .multiply((exchangeMetaData==null )  ? BigDecimal.ONE :
                                     exchangeMetaData
                                         .getInstruments()
                                         .get(adaptOkexInstrumentId(okexPosition.getInstrumentId()))
-                                        .getContractValue()))
+                                        .getContractValue()) : okexPosition
+                                .getPosition()
+                                .abs()
+                                .multiply((exchangeMetaData==null )  ? BigDecimal.ONE :
+                                        exchangeMetaData
+                                                .getInstruments()
+                                                .get(adaptOkexInstrumentId(okexPosition.getInstrumentId()))
+                                                .getContractValue()))
                         .unRealisedPnl(okexPosition.getUnrealizedPnL())
                         .build()));
     return new OpenPositions(openPositions);

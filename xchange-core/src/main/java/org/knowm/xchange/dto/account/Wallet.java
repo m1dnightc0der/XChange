@@ -59,6 +59,28 @@ public final class Wallet implements Serializable {
   /** Current leverage for margin trading done on this wallet */
   private final BigDecimal currentLeverage;
 
+  /** Current margin ratio for this wallet */
+  private final BigDecimal mmr;
+  /**
+   * Constructs a {@link Wallet}.
+   *
+   * @param id the wallet id
+   * @param name a descriptive name for the wallet
+   * @param balances the balances, the currencies of the balances should not be duplicated.
+   * @param features all the features that wallet supports
+   *     <p>maxLeverage and currentLeverage are BigDecimal.ZERO for the default constructor
+   */
+  public Wallet(
+          @JsonProperty("id") String id,
+          @JsonProperty("name") String name,
+          @JsonProperty("balances") Collection<Balance> balances,
+          @JsonProperty("features") Set<WalletFeature> features,
+          @JsonProperty("maxLeverage") BigDecimal maxLeverage,
+          @JsonProperty("currentLeverage") BigDecimal currentLeverage
+
+  ) {
+    this(id, name, balances, features, maxLeverage, currentLeverage,null);
+  }
   /**
    * Constructs a {@link Wallet}.
    *
@@ -74,7 +96,9 @@ public final class Wallet implements Serializable {
       @JsonProperty("balances") Collection<Balance> balances,
       @JsonProperty("features") Set<WalletFeature> features,
       @JsonProperty("maxLeverage") BigDecimal maxLeverage,
-      @JsonProperty("currentLeverage") BigDecimal currentLeverage) {
+      @JsonProperty("currentLeverage") BigDecimal currentLeverage,
+            @JsonProperty("mmr") BigDecimal mmr
+  ) {
 
     this.id = id;
     if (name == null) {
@@ -101,6 +125,7 @@ public final class Wallet implements Serializable {
     this.features = features;
     this.maxLeverage = maxLeverage;
     this.currentLeverage = currentLeverage;
+    this.mmr=mmr;
   }
 
   /**
@@ -110,7 +135,13 @@ public final class Wallet implements Serializable {
 
     return id;
   }
+  /**
+   * @return The maintance margin ratio
+   */
+  public BigDecimal getMmr() {
 
+    return mmr;
+  }
   /**
    * @return A descriptive name for the wallet
    */
@@ -204,6 +235,8 @@ public final class Wallet implements Serializable {
         + maxLeverage
         + ", currentLeverage="
         + currentLeverage
+            + ", mmr="
+            + mmr
         + '}';
   }
 
@@ -222,6 +255,8 @@ public final class Wallet implements Serializable {
     private BigDecimal maxLeverage = BigDecimal.ZERO;
 
     private BigDecimal currentLeverage = BigDecimal.ZERO;
+
+    private BigDecimal mmr = null;
 
     public static Builder from(Collection<Balance> balances) {
       return new Builder().balances(balances);
@@ -261,10 +296,14 @@ public final class Wallet implements Serializable {
       this.currentLeverage = currentLeverage;
       return this;
     }
+    public Builder mmr(BigDecimal mmr) {
 
+      this.mmr = mmr;
+      return this;
+    }
     public Wallet build() {
 
-      return new Wallet(id, name, balances, features, maxLeverage, currentLeverage);
+      return new Wallet(id, name, balances, features, maxLeverage, currentLeverage,mmr);
     }
   }
 }

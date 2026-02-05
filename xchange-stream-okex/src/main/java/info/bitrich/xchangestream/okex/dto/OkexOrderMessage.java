@@ -17,7 +17,7 @@ public class OkexOrderMessage {
   @Data
   @AllArgsConstructor
   public static class OrderArg {
-    private final String instId;
+    private final String instIdCode;
     private final String tdMode;
     private final String ccy;
     private final String clOrdId;

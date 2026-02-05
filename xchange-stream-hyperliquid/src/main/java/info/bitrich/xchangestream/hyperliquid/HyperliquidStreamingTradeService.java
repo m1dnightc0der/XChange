@@ -172,6 +172,7 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
                 // Check for error in status
                 if (status.has("error")) {
                     String error = status.get("error").asText();
+                    limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
                     throw new ExchangeException("Order placement failed: " + error);
                 }
             }
@@ -180,11 +181,13 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
         // Check for error response
         if (response.has("response") && response.get("response").has("error")) {
             String error = response.get("response").get("error").asText();
+            limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
             throw new ExchangeException("Order placement failed: " + error);
         }
 
         // Unexpected response format
         LOG.error("Unexpected response format: {}", response.toString());
+        limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
         throw new ExchangeException("Unexpected response format from exchange");
     }
 

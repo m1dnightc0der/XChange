@@ -3,6 +3,7 @@ package org.knowm.xchange.hyperliquid;
 import org.knowm.xchange.BaseExchange;
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeSpecification;
+import org.knowm.xchange.hyperliquid.service.HyperliquidAccountService;
 import org.knowm.xchange.hyperliquid.service.HyperliquidMarketDataService;
 import org.knowm.xchange.hyperliquid.service.HyperliquidTradeService;
 
@@ -21,6 +22,7 @@ public class HyperliquidExchange extends BaseExchange implements Exchange {
     concludeHostParams(exchangeSpecification);
     this.marketDataService = new HyperliquidMarketDataService(this);
     this.tradeService = new HyperliquidTradeService(this);
+    this.accountService = new HyperliquidAccountService(this);
   }
 
   private static void concludeHostParams(ExchangeSpecification exchangeSpecification) {

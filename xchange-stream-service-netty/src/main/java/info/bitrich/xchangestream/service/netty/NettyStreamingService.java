@@ -191,7 +191,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                                         maxFramePayloadLength),
                                                 this::messageHandler);
 
-                                if (eventLoopGroup == null || eventLoopGroup.isShutdown()) {
+                                if (eventLoopGroup == null || eventLoopGroup.isShuttingDown()) {
                                     eventLoopGroup = new NioEventLoopGroup(3);//one for trades, order books and orders
                                 }
 
@@ -343,10 +343,11 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     private void scheduleReconnectWithRetry(CompletableFuture<Void> future) {
         LOG.info("Scheduling reconnection");
 
-        if (retry != null) {
-            LOG.info("Waiting to reconnection before " + retry);
+        Instant retryLocal = this.retry;
+        if (retryLocal != null) {
+            LOG.info("Waiting to reconnection before " + retryLocal);
             Instant now = Instant.now();
-            while (retry.isAfter(now)) {
+            while (retryLocal.isAfter(now)) {
                 try {
                     Thread.sleep(retryDuration.toMillis()/2);
                 } catch (InterruptedException e) {
@@ -355,11 +356,11 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                 }
                 now = Instant.now();
             }
-            retry = null;
+            this.retry = null;
         }
 
-        if (webSocketChannel == null || webSocketChannel.eventLoop().isShutdown()) {
-            LOG.warn("Cannot schedule reconnect: event loop unavailable");
+        if (webSocketChannel == null || webSocketChannel.eventLoop().isShuttingDown()) {
+            LOG.warn("Cannot schedule reconnect: event loop unavailable or shutting down");
             future.completeExceptionally(new IllegalStateException("Event loop unavailable"));
             return;
         }
@@ -368,6 +369,12 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                 .eventLoop()
                 .schedule(
                         () -> {
+                            // Check if event loop is shutting down before attempting reconnect
+                            if (eventLoopGroup != null && eventLoopGroup.isShuttingDown()) {
+                                LOG.warn("Event loop is shutting down, aborting reconnection attempt");
+                                future.completeExceptionally(new IllegalStateException("Event loop shutting down"));
+                                return;
+                            }
                             connect()
                                     .subscribe(
                                             () -> {
@@ -395,6 +402,20 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
 
         if (retry == null) {
             retry = Instant.now().plus(retryDuration);
+        }
+    }
+
+    /**
+     * Sets a minimum delay before the next reconnection attempt.
+     * Useful for subclasses to enforce rate limits (e.g., OKX's 3 connections/second limit).
+     *
+     * @param delay the minimum duration to wait before reconnecting
+     */
+    protected void setRetryDelay(Duration delay) {
+        Instant newRetry = Instant.now().plus(delay);
+        Instant currentRetry = this.retry;
+        if (currentRetry == null || newRetry.isAfter(currentRetry)) {
+            this.retry = newRetry;
         }
     }
 
@@ -515,6 +536,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         e -> {
                             if (webSocketChannel == null || !webSocketChannel.isOpen()) {
                                 e.onError(new NotConnectedException());
+                                return;
                             }
                             channels.computeIfAbsent(
                                     subscriptionUniqueId,
@@ -547,6 +569,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         e -> {
                             if (webSocketChannel == null || !webSocketChannel.isOpen()) {
                                 e.onError(new NotConnectedException());
+                                return;
                             }
                             singles.computeIfAbsent(
                                     id.toString(),
@@ -574,6 +597,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         e -> {
                             if (webSocketChannel == null || !webSocketChannel.isOpen()) {
                                 e.onError(new NotConnectedException());
+                                return;
                             }
                             channels.computeIfAbsent(
                                     subscriptionUniqueId,
@@ -771,7 +795,10 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }
 
     public boolean isSocketOpen() {
-        return webSocketChannel != null && webSocketChannel.isOpen() && webSocketChannel.isWritable();
+        return webSocketChannel != null
+                && webSocketChannel.isOpen()
+                && webSocketChannel.isWritable()
+                && connectionStateModel.getState() == State.OPEN;
     }
 
     public void useCompressedMessages(boolean compressedMessages) {

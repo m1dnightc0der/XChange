@@ -88,7 +88,7 @@ public class OkexPosition {
   private String optionValue;
 
   @JsonProperty("notionalUsd")
-  private String notionalUsd;
+  private BigDecimal notionalUsd;
 
   @JsonProperty("adl")
   private String adl;

@@ -12,8 +12,10 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.meta.ExchangeMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.UserTrade;
+import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
+import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.trade.OkexOrderDetails;
 import org.knowm.xchange.okex.dto.trade.OkexOrderRequest;
 import org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory;
@@ -25,7 +27,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import static info.bitrich.xchangestream.okex.OkexStreamingService.USERFILLS;
 import static info.bitrich.xchangestream.okex.OkexStreamingService.USERTRADES;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.knowm.xchange.okex.OkexExchange.PARAM_CONVERT_QUANTITIES;
@@ -34,6 +40,7 @@ public class OkexStreamingTradeService implements StreamingTradeService {
 
     private final OkexStreamingService service;
     private final ExchangeMetaData exchangeMetaData;
+    private final Map<String, Integer> instrumentCodeMap;
     private static final Logger LOG = LoggerFactory.getLogger(OkexStreamingTradeService.class);
     private final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
     private final SynchronizedValueFactory<Long> nonceFactory =
@@ -41,9 +48,12 @@ public class OkexStreamingTradeService implements StreamingTradeService {
     protected final Map<Long, SingleEmitter> messages = new ConcurrentHashMap<>();
 
     public OkexStreamingTradeService(
-            OkexStreamingService service, ExchangeMetaData exchangeMetaData) {
+            OkexStreamingService service,
+            ExchangeMetaData exchangeMetaData,
+            Map<String, Integer> instrumentCodeMap) {
         this.service = service;
         this.exchangeMetaData = exchangeMetaData;
+        this.instrumentCodeMap = instrumentCodeMap;
     }
 
     @Override
@@ -51,7 +61,12 @@ public class OkexStreamingTradeService implements StreamingTradeService {
 
         ArrayList orderList = new ArrayList<OkexOrderMessage.OrderArg>();
         OkexOrderRequest okxOrder = OkexAdapters.adaptOrder(
-                limitOrder, (Boolean.TRUE.equals(service.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchangeMetaData : null), "1");
+                limitOrder,
+                (Boolean.TRUE.equals(service.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchangeMetaData : null),
+                "1",
+                instrumentCodeMap,
+                true  // USE instIdCode for WebSocket operations
+        );
 
 
         OkexOrderMessage.OrderArg args = new OkexOrderMessage.OrderArg(okxOrder.instrumentId, okxOrder.tradeMode, okxOrder.marginCurrency, okxOrder.clientOrderId, okxOrder.tag, okxOrder.side, okxOrder.posSide, okxOrder.orderType, okxOrder.amount, okxOrder.price, null, null, okxOrder.reducePosition, null, false, null, null, null);
@@ -62,12 +77,27 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         message.setId(id);
         message.setOp("order");
         message.setArgs(orderList);
-        if (!service.isLoggedIn) {
-            service.login();
-        }
-        @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();
 
-        String orderId= response.get("data").get(0).get("ordId").textValue();
+        // Ensure login is complete before sending order
+        if (!service.isLoggedIn) {
+            try {
+                // Wait for login with a reasonable timeout (5 seconds)
+                service.login().get(5, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                throw new ExchangeException("Login timed out before placing order", e);
+            } catch (ExecutionException e) {
+                throw new ExchangeException("Login failed: " + e.getCause().getMessage(), e.getCause());
+            }
+        }
+
+        @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();
+        if (response.get("data") != null && response.get("data").get(0) != null && response.get("data").get(0).get("sCode") != null && !response.get("data").get(0).get("sCode").equals("0")) {
+            throw new OkexException(
+                    response.get("data").get(0).get("sMsg").textValue(),
+                    Integer.parseInt(response.get("data").get(0).get("sCode").textValue()));
+
+        }
+        String orderId = response.get("data").get(0).get("ordId").textValue();
         return orderId;
     }
 
@@ -95,10 +125,12 @@ public class OkexStreamingTradeService implements StreamingTradeService {
 
     @Override
     public Observable<UserTrade> getUserTrades(Instrument instrument, Object... args) {
-        String channelUniqueId = USERTRADES + OkexAdapters.adaptInstrument(instrument);
-
+        String channelUniqueId = USERFILLS;
         return service
-                .subscribeChannel(channelUniqueId)
+                .subscribeChannel(USERFILLS).doOnError(
+                        error -> {
+                            throw error;
+                        })
                 .filter(message -> message.has("data"))
                 .flatMap(
                         jsonNode -> {
@@ -112,4 +144,6 @@ public class OkexStreamingTradeService implements StreamingTradeService {
                                     OkexAdapters.adaptUserTrades(okexOrderDetails, exchangeMetaData).getUserTrades());
                         });
     }
+
+
 }

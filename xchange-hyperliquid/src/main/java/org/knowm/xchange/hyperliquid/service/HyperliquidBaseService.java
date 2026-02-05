@@ -50,7 +50,7 @@ public class HyperliquidBaseService extends BaseExchangeService<HyperliquidExcha
         exchange.getNonceFactory(),
         exchange.getExchangeSpecification().getExchangeSpecificParametersItem("Use_Sandbox") != null && ((Boolean) exchange.getExchangeSpecification().getExchangeSpecificParametersItem("Use_Sandbox") )?
             false : true,
-        (String) exchange.getExchangeSpecification().getExchangeSpecificParametersItem("vaultAddress"), (String) exchange.getExchangeSpecification().getExchangeSpecificParametersItem("wallet")
+        (String) exchange.getExchangeSpecification().getExchangeSpecificParametersItem("vault"), (String) exchange.getExchangeSpecification().getExchangeSpecificParametersItem("wallet")
     );
   }
 }

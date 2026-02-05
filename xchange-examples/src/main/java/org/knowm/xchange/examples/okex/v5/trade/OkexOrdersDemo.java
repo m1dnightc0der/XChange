@@ -10,6 +10,7 @@ import java.util.List;
 import org.knowm.xchange.Exchange;
 import org.knowm.xchange.ExchangeFactory;
 import org.knowm.xchange.ExchangeSpecification;
+import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.Order;
@@ -41,7 +42,8 @@ public class OkexOrdersDemo {
   private static void generic(Exchange okexExchange) throws IOException {
 
     TradeService tradeService = okexExchange.getTradeService();
-    FuturesContract contract = new FuturesContract(CurrencyPair.BTC_USDT, "251024");
+   // FuturesContract contract = new FuturesContract(CurrencyPair.BTC_USDT, "251024");
+    FuturesContract contract = new FuturesContract(new CurrencyPair("HYPE", "USDT"),"SWAP");
 
     OpenOrders openOrders = tradeService.getOpenOrders();
     System.out.println(openOrders);
@@ -58,14 +60,14 @@ public class OkexOrdersDemo {
 
       LimitOrder limitOrder = new LimitOrder.Builder(Order.OrderType.BID, contract)
               .originalAmount(new BigDecimal("1"))        // Size: 0.2 ETH
-              .limitPrice(new BigDecimal("99000"))
+              .limitPrice(new BigDecimal("20.5"))
               .userReference("77dd55")// Price: $1100 (very low to ensure it rests)
               .build();
 
 
       String placeLimitOrder =
-          tradeService.placeLimitOrder(limitOrder
-             );
+              tradeService.placeLimitOrder(limitOrder
+              );
       System.out.println(placeLimitOrder);
       List<OrderQueryParamInstrument> params = new ArrayList<OrderQueryParamInstrument>();
       params.add(new DefaultQueryOrderParamInstrument(limitOrder.getInstrument(), placeLimitOrder));
@@ -78,10 +80,8 @@ public class OkexOrdersDemo {
       orders = tradeService.getOrder(clientOidparams.toArray(new ClientOrderIdQueryParamInstrument[clientOidparams.size()]));
 
 
-
-
       OkexCancelOrderParams req =
-          new OkexTradeParams.OkexCancelOrderParams(contract, placeLimitOrder);
+              new OkexTradeParams.OkexCancelOrderParams(contract, placeLimitOrder);
 
       boolean cancelOrder = tradeService.cancelOrder(req);
       System.out.println("Cancelled " + cancelOrder);

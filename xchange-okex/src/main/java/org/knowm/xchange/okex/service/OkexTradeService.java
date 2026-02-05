@@ -117,8 +117,14 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
       Instrument instrument = ((OrderQueryParamInstrument) orderQueryParams).getInstrument();
       String orderId = orderQueryParams.getOrderId();
 
+      OkexResponse<List<OkexOrderDetails>> okexResponse = getOkexOrder(adaptInstrument(instrument), orderId);
+      if(!okexResponse.isSuccess()){
+        throw new OkexException(
+                okexResponse.getMsg(),
+                Integer.parseInt(okexResponse.getCode()));
+      }
       List<OkexOrderDetails> orderResults =
-          getOkexOrder(OkexAdapters.adaptInstrument(instrument), orderId).getData();
+              okexResponse.getData();
 
       if (!orderResults.isEmpty()) {
         result = OkexAdapters.adaptOrder(orderResults.get(0), Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null);
@@ -213,7 +219,16 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
 
   @Override
   public String changeOrder(LimitOrder limitOrder) throws IOException, FundsExceededException {
-    return amendOkexOrder(OkexAdapters.adaptAmendOrder(limitOrder, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null)))
+
+    OkexResponse<List<OkexOrderResponse>> okexResponse = amendOkexOrder(adaptAmendOrder(limitOrder, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null)));
+    if(!okexResponse.isSuccess()){
+      throw new OkexException(
+              okexResponse.getMsg(),
+              Integer.parseInt(okexResponse.getCode()));
+    }
+
+
+    return okexResponse
         .getData()
         .get(0)
         .getOrderId();

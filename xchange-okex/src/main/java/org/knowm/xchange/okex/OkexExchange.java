@@ -6,7 +6,10 @@ import static org.knowm.xchange.okex.OkexAdapters.FUTURES;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.knowm.xchange.BaseExchange;
+import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.okex.dto.account.OkexTradeFee;
@@ -31,6 +34,8 @@ public class OkexExchange extends BaseExchange {
   private static ResilienceRegistries RESILIENCE_REGISTRIES;
 
   public String accountLevel = "1";
+
+  private Map<String, Integer> instrumentCodeMap = new ConcurrentHashMap<>();
 
   /** Adjust host parameters depending on exchange specific parameters */
   private static void concludeHostParams(ExchangeSpecification exchangeSpecification) {
@@ -140,6 +145,11 @@ public class OkexExchange extends BaseExchange {
     }
 
     exchangeMetaData = OkexAdapters.adaptToExchangeMetaData(instruments, currencies, tradeFee);
+    instrumentCodeMap = OkexAdapters.buildInstrumentCodeMap(instruments);
+  }
+
+  public Map<String, Integer> getInstrumentCodeMap() {
+    return instrumentCodeMap;
   }
 
   protected boolean useSandbox() {
