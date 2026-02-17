@@ -14,6 +14,7 @@ import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.hyperliquid.HyperliquidAuthenticated;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
+import org.knowm.xchange.hyperliquid.dto.trade.TimeInForce;
 import org.knowm.xchange.hyperliquid.service.HyperliquidAuth;
 import org.knowm.xchange.instrument.Instrument;
 import org.slf4j.Logger;
@@ -88,9 +89,16 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
         Cloid cloid = null;
         String userRef = limitOrder.getUserReference();
 
-
+        Map<String, Object> orderType;
         // Use HyperliquidAdapters for common order placement logic
-        Map<String, Object> orderType = HyperliquidAdapters.createOrderType("gtc");
+        if (limitOrder.getOrderFlags().contains(org.knowm.xchange.hyperliquid.dto.trade.TimeInForce.Alo)) {
+            orderType = HyperliquidAdapters.createOrderType("alo");
+        } else if (limitOrder.getOrderFlags().contains(TimeInForce.Ioc)) {
+             orderType = HyperliquidAdapters.createOrderType("ioc");
+        } else {
+             orderType = HyperliquidAdapters.createOrderType("gtc");
+        }
+
 
         Map<String, Object> orderWire = HyperliquidAdapters.createOrderWire(
                 getAssetIndex(coin),

@@ -16,6 +16,7 @@ import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
 import org.knowm.xchange.hyperliquid.dto.trade.Fill;
 import org.knowm.xchange.hyperliquid.dto.trade.HyperliquidTradeParams;
 import org.knowm.xchange.hyperliquid.dto.trade.PlaceOrderResponse;
+import org.knowm.xchange.hyperliquid.dto.trade.TimeInForce;
 import org.knowm.xchange.service.trade.TradeService;
 import org.knowm.xchange.service.trade.params.CancelOrderByIdParams;
 import org.knowm.xchange.service.trade.params.CancelOrderByInstrument;
@@ -78,7 +79,13 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
 
         // Create order type structure (default to GTC limit order)
         java.util.Map<String, Object> limitType = new java.util.LinkedHashMap<>();
-        limitType.put("tif", "Gtc");
+        if (limitOrder.getOrderFlags().contains(org.knowm.xchange.hyperliquid.dto.trade.TimeInForce.Alo)) {
+            limitType.put("tif", "Alo");
+        } else if (limitOrder.getOrderFlags().contains(TimeInForce.Ioc)) {
+            limitType.put("tif", "Ioc");
+        } else {
+            limitType.put("tif", "Gtc");
+        }
         java.util.Map<String, Object> orderType = new java.util.LinkedHashMap<>();
         orderType.put("limit", limitType);
 
