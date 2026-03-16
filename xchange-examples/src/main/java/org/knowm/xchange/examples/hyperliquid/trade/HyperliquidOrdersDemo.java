@@ -64,23 +64,15 @@ public class HyperliquidOrdersDemo {
     // Read credentials from environment variables for security
     // Set these before running: export HYPERLIQUID_PRIVATE_KEY="your_private_key"
 
-    
-    // The private key is used as the secret key for authentication
-    //exSpec.setSecretKey("");
-
-     // exSpec.setApiKey("");
 
 
-    exSpec.setSecretKey("");
-    exSpec.setApiKey("");
+
+    exSpec.setSecretKey(" ");
+    exSpec.setApiKey(" ");
     exSpec.setExchangeSpecificParametersItem("wallet", "");
     // Optional: Set to true for testnet, false for mainnet
      exSpec.setExchangeSpecificParametersItem("Use_Sandbox", false);
-    // Optional: Vault address if trading on behalf of a vault
-
-       // exSpec.setExchangeSpecificParametersItem("vaultAddress", "");
-
-
+    // Optional: Vault address if trading on behalf of
     return ExchangeFactory.INSTANCE.createExchange(exSpec);
   }
 
