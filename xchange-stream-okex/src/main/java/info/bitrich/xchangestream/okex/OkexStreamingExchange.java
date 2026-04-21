@@ -50,11 +50,17 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
     // but we add this check to ensure metadata is available before streaming services are created
   }
 
+  /**
+   * FIX Issue 8: Initialize streaming services once during exchange initialization (Bybit pattern).
+   * This prevents creating new service instances on every reconnection, which caused thread leaks.
+   * See: ISSUE_8_OOM_BUG_CONFIRMED.md
+   */
   @Override
-  public Completable connect(ProductSubscription... args) {
+  protected void initServices() {
+    super.initServices();
+
     // Ensure exchangeMetaData is loaded before creating streaming services
     // This is critical for proper contract size to volume conversion on SWAP instruments
-
     boolean needsMetadata = exchangeMetaData == null ||
                            exchangeMetaData.getInstruments() == null ||
                            exchangeMetaData.getInstruments().isEmpty();
@@ -67,11 +73,12 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
       } catch (Exception e) {
         // If remoteInit fails, warn but continue
         // Services will work without metadata, but contract conversions will be disabled
-        logger.warn("Failed to load exchange metadata during connect. " +
+        logger.warn("Failed to load exchange metadata during initServices. " +
                    "Contract size conversions will be disabled. Error: {}", e.getMessage());
       }
     }
 
+    // Create streaming services ONCE during initialization
     this.streamingService = new OkexStreamingService(getApiUrl(), this.exchangeSpecification);
     this.streamingMarketDataService = new OkexStreamingMarketDataService(streamingService);
     this.streamingTradeService = new OkexStreamingTradeService(
@@ -79,7 +86,15 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
         exchangeMetaData,
         getInstrumentCodeMap()
     );
+  }
 
+  /**
+   * FIX Issue 8: Simplified to just connect using existing streaming service.
+   * Service is created once in initServices(), not recreated on every connect() call.
+   */
+  @Override
+  public Completable connect(ProductSubscription... args) {
+    // Just connect - services already created in initServices()
     return streamingService.connect();
   }
 

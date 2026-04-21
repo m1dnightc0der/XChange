@@ -67,9 +67,24 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
                 if(!this.isSocketOpen()){
                     this.connect();
                 }
+                // FIX: Add state check and graceful error handling to prevent ping spam on closed sockets
                 pingPongSubscription = pingPongSrc.subscribe(
-                        msg -> this.sendMessage(getPingMessage()),
-                        error -> completable.onError(error));
+                        msg -> {
+                          // Only send ping if socket is open to avoid "WebSocket is not open!" warnings
+                          if (isSocketOpen()) {
+                            try {
+                              this.sendMessage(getPingMessage());
+                            } catch (Exception e) {
+                              LOG.debug("Failed to send ping (socket may have closed): {}", e.getMessage());
+                            }
+                          } else {
+                            LOG.debug("Skipping ping - socket not open");
+                          }
+                        },
+                        error -> {
+                          LOG.debug("Ping scheduler error: {}", error.getMessage());
+                          completable.onError(error);
+                        });
                 completable.onComplete();
             } catch (Exception e) {
                 completable.onError(e);
@@ -246,6 +261,10 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
+            // FIX: Dispose ping subscription FIRST to immediately stop any ping attempts on closed socket
+            // This prevents "WebSocket is not open!" spam during disconnect/reconnect
+            pingPongDisconnectIfConnected();
+
             super.channelInactive(ctx);
             if (channelInactiveHandler != null) {
                 channelInactiveHandler.onMessage("WebSocket Client disconnected!");

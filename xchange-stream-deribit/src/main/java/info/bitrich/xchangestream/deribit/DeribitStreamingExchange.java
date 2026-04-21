@@ -32,14 +32,30 @@ public class DeribitStreamingExchange extends DeribitExchange implements Streami
 
   public DeribitStreamingExchange() {}
 
+  /**
+   * FIX Issue 8: Initialize streaming services once during exchange initialization (Bybit pattern).
+   * This prevents creating new service instances on every reconnection, which caused thread leaks.
+   * See: ISSUE_8_OOM_BUG_CONFIRMED.md
+   */
+  @Override
+  protected void initServices() {
+    super.initServices();
+
+    // Create streaming services ONCE during initialization
+    this.streamingService = new DeribitStreamingService(getApiUrl(), this.exchangeSpecification);
+    this.streamingMarketDataService = new DeribitStreamingMarketDataService(streamingService);
+    this.streamingTradeService = new DeribitStreamingTradeService(streamingService, exchangeMetaData);
+  }
+
+  /**
+   * FIX Issue 8: Simplified to just connect using existing streaming service.
+   * Service is created once in initServices(), not recreated on every connect() call.
+   */
   @Override
   public Completable connect(ProductSubscription... args) {
     LOG.debug("DeribitStreamingExchange - connect called from: {}",  Thread.currentThread().getStackTrace()[2]);
 
-    this.streamingService = new DeribitStreamingService(getApiUrl(), this.exchangeSpecification);
-    this.streamingMarketDataService = new DeribitStreamingMarketDataService(streamingService);
-    this.streamingTradeService = new DeribitStreamingTradeService(streamingService, exchangeMetaData);
-
+    // Just connect - services already created in initServices()
     return streamingService.connect();
   }
 

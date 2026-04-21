@@ -27,12 +27,16 @@ public class HyperliquidStreamingExchange extends HyperliquidExchange implements
   private HyperliquidStreamingMarketDataService streamingMarketDataService;
   private HyperliquidStreamingTradeService streamingTradeService;
 
-
-
+  /**
+   * FIX Issue 8: Initialize streaming services once during exchange initialization (Bybit pattern).
+   * This prevents creating new service instances on every reconnection, which caused thread leaks.
+   * See: ISSUE_8_OOM_BUG_CONFIRMED.md
+   */
   @Override
-  public Completable connect(ProductSubscription... args) {
-    LOG.debug("HyperliquidStreamingExchange - connect called from: {}", Thread.currentThread().getStackTrace()[2]);
+  protected void initServices() {
+    super.initServices();
 
+    // Create streaming services ONCE during initialization
     this.streamingService = new HyperliquidStreamingService(getApiUrl(), this.exchangeSpecification);
     this.streamingMarketDataService = new HyperliquidStreamingMarketDataService(streamingService);
 
@@ -71,7 +75,17 @@ public class HyperliquidStreamingExchange extends HyperliquidExchange implements
           metadataLoader
       );
     }
+  }
 
+  /**
+   * FIX Issue 8: Simplified to just connect using existing streaming service.
+   * Service is created once in initServices(), not recreated on every connect() call.
+   */
+  @Override
+  public Completable connect(ProductSubscription... args) {
+    LOG.debug("HyperliquidStreamingExchange - connect called from: {}", Thread.currentThread().getStackTrace()[2]);
+
+    // Just connect - services already created in initServices()
     return streamingService.connect();
   }
 

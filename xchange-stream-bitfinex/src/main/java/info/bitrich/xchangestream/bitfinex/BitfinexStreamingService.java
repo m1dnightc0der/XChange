@@ -10,6 +10,9 @@ import info.bitrich.xchangestream.bitfinex.dto.BitfinexWebSocketAuthTrade;
 import info.bitrich.xchangestream.bitfinex.dto.BitfinexWebSocketSubscriptionMessage;
 import info.bitrich.xchangestream.bitfinex.dto.BitfinexWebSocketUnSubscriptionMessage;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
+import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Observable;
@@ -105,8 +108,20 @@ public class BitfinexStreamingService extends JsonNettyStreamingService {
     return super.connect()
         .doOnComplete(
             () ->
+                // FIX: Add state check and graceful error handling to prevent calculator spam on closed sockets
                 this.calculator =
-                    Observable.interval(1, TimeUnit.SECONDS).subscribe(x -> requestCalcs()));
+                    Observable.interval(1, TimeUnit.SECONDS).subscribe(x -> {
+                      // Only request calcs if socket is open to avoid errors
+                      if (isSocketOpen()) {
+                        try {
+                          requestCalcs();
+                        } catch (Exception e) {
+                          LOG.debug("Failed to request calcs (socket may have closed): {}", e.getMessage());
+                        }
+                      } else {
+                        LOG.debug("Skipping calculator request - socket not open");
+                      }
+                    }));
   }
 
   @Override
@@ -376,5 +391,32 @@ public class BitfinexStreamingService extends JsonNettyStreamingService {
     LOG.debug("Requesting full calculated balances for: {} in {}", currencies, WALLETS);
 
     sendObjectMessage(message);
+  }
+
+  // FIX: Override to use custom handler that disposes calculator on disconnect
+  @Override
+  protected WebSocketClientHandler getWebSocketClientHandler(
+      WebSocketClientHandshaker handshake, WebSocketClientHandler.WebSocketMessageHandler handler) {
+    return new BitfinexWebSocketClientHandler(handshake, handler);
+  }
+
+  /**
+   * Custom client handler to dispose calculator subscription on channel close
+   */
+  class BitfinexWebSocketClientHandler extends NettyWebSocketClientHandler {
+
+    public BitfinexWebSocketClientHandler(
+        WebSocketClientHandshaker handshake, WebSocketMessageHandler handler) {
+      super(handshake, handler);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+      // FIX: Dispose calculator subscription to prevent it running on closed socket
+      if (calculator != null && !calculator.isDisposed()) {
+        calculator.dispose();
+      }
+      super.channelInactive(ctx);
+    }
   }
 }

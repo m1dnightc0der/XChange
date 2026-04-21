@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 
 public class OkCoinStreamingService extends JsonNettyStreamingService {
 
+  private static final Logger LOG = LoggerFactory.getLogger(OkCoinStreamingService.class);
+
   private final Observable<Long> pingPongSrc = Observable.interval(15, 15, TimeUnit.SECONDS);
 
   private Disposable pingPongSubscription;
@@ -42,8 +44,20 @@ public class OkCoinStreamingService extends JsonNettyStreamingService {
                 if (pingPongSubscription != null && !pingPongSubscription.isDisposed()) {
                   pingPongSubscription.dispose();
                 }
+                // FIX: Add explicit state check and graceful error handling to prevent ping spam on closed sockets
                 pingPongSubscription =
-                    pingPongSrc.subscribe(o -> this.sendMessage("{\"event\":\"ping\"}"));
+                    pingPongSrc.subscribe(o -> {
+                      // Only send ping if socket is open to avoid "WebSocket is not open!" warnings
+                      if (isSocketOpen()) {
+                        try {
+                          this.sendMessage("{\"event\":\"ping\"}");
+                        } catch (Exception e) {
+                          LOG.debug("Failed to send ping (socket may have closed): {}", e.getMessage());
+                        }
+                      } else {
+                        LOG.debug("Skipping ping - socket not open");
+                      }
+                    });
                 completable.onComplete();
               } catch (Exception e) {
                 completable.onError(e);

@@ -15,8 +15,12 @@ import io.reactivex.rxjava3.disposables.Disposable;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class KucoinStreamingService extends JsonNettyStreamingService {
+
+  private static final Logger LOG = LoggerFactory.getLogger(KucoinStreamingService.class);
 
   private final AtomicLong refCount = new AtomicLong();
   private final Observable<Long> pingPongSrc;
@@ -41,13 +45,24 @@ class KucoinStreamingService extends JsonNettyStreamingService {
                 if (pingPongSubscription != null && !pingPongSubscription.isDisposed()) {
                   pingPongSubscription.dispose();
                 }
+                // FIX: Add state check and graceful error handling to prevent ping spam on closed sockets
                 pingPongSubscription =
                     pingPongSrc.subscribe(
-                        o ->
-                            this.sendMessage(
-                                "{\"type\":\"ping\", \"id\": \""
-                                    + refCount.incrementAndGet()
-                                    + "\"}"));
+                        o -> {
+                          // Only send ping if socket is open to avoid "WebSocket is not open!" warnings
+                          if (isSocketOpen()) {
+                            try {
+                              this.sendMessage(
+                                  "{\"type\":\"ping\", \"id\": \""
+                                      + refCount.incrementAndGet()
+                                      + "\"}");
+                            } catch (Exception e) {
+                              LOG.debug("Failed to send ping (socket may have closed): {}", e.getMessage());
+                            }
+                          } else {
+                            LOG.debug("Skipping ping - socket not open");
+                          }
+                        });
                 completable.onComplete();
               } catch (Exception e) {
                 completable.onError(e);

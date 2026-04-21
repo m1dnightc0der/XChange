@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import dto.BybitSubscribeMessage;
 import info.bitrich.xchangestream.service.netty.JsonNettyStreamingService;
 import info.bitrich.xchangestream.service.netty.WebSocketClientCompressionAllowClientNoContextAndServerNoContextHandler;
+import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketClientExtensionHandler;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.CompletableSource;
@@ -66,8 +69,20 @@ public class BybitStreamingService extends JsonNettyStreamingService {
                 login();
               }
               pingPongDisconnectIfConnected();
+              // FIX: Add state check and graceful error handling to prevent ping spam on closed sockets
               pingPongSubscription = pingPongSrc.subscribe(
-                  o -> this.sendMessage("{\"op\":\"ping\"}"));
+                  o -> {
+                    // Only send ping if socket is open to avoid "WebSocket is not open!" warnings
+                    if (isSocketOpen()) {
+                      try {
+                        this.sendMessage("{\"op\":\"ping\"}");
+                      } catch (Exception e) {
+                        LOG.debug("Failed to send ping (socket may have closed): {}", e.getMessage());
+                      }
+                    } else {
+                      LOG.debug("Skipping ping - socket not open");
+                    }
+                  });
               completable.onComplete();
             });
   }
@@ -187,5 +202,30 @@ public class BybitStreamingService extends JsonNettyStreamingService {
   @Override
   protected WebSocketClientExtensionHandler getWebSocketClientExtensionHandler() {
     return WebSocketClientCompressionAllowClientNoContextAndServerNoContextHandler.INSTANCE;
+  }
+
+  // FIX: Override to use custom handler that disposes ping on disconnect
+  @Override
+  protected WebSocketClientHandler getWebSocketClientHandler(
+      WebSocketClientHandshaker handshake, WebSocketClientHandler.WebSocketMessageHandler handler) {
+    return new BybitWebSocketClientHandler(handshake, handler);
+  }
+
+  /**
+   * Custom client handler to dispose ping subscription on channel close
+   */
+  class BybitWebSocketClientHandler extends NettyWebSocketClientHandler {
+
+    public BybitWebSocketClientHandler(
+        WebSocketClientHandshaker handshake, WebSocketMessageHandler handler) {
+      super(handshake, handler);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+      // FIX: Dispose ping subscription FIRST to immediately stop any ping attempts on closed socket
+      pingPongDisconnectIfConnected();
+      super.channelInactive(ctx);
+    }
   }
 }
