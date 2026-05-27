@@ -46,8 +46,12 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 public abstract class NettyStreamingService<T> extends ConnectableService {
@@ -57,21 +61,75 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     protected static final Duration DEFAULT_CONNECTION_TIMEOUT = Duration.ofSeconds(5);
     protected static final Duration DEFAULT_RETRY_DURATION = Duration.ofSeconds(5);
     protected static final int DEFAULT_IDLE_TIMEOUT = 5;
+    public static final String LATENCY_PROBE_PROPERTY = "xchangestream.latencyProbe";
+    private static final AtomicLong DISPATCHER_THREAD_COUNTER = new AtomicLong();
+    private static final boolean LATENCY_PROBE = Boolean.getBoolean(LATENCY_PROBE_PROPERTY);
 
     protected class Subscription {
 
         final ObservableEmitter<T> emitter;
         final String channelName;
         final Object[] args;
+        final ExecutorService dispatcher;
 
         public Subscription(ObservableEmitter<T> emitter, String channelName, Object[] args) {
             this.emitter = emitter;
             this.channelName = channelName;
             this.args = args;
+            this.dispatcher =
+                    Executors.newSingleThreadExecutor(
+                            runnable -> {
+                                Thread thread =
+                                        new Thread(
+                                                runnable,
+                                                "xchange-stream-dispatch-"
+                                                        + DISPATCHER_THREAD_COUNTER.incrementAndGet()
+                                                        + "-"
+                                                        + channelName);
+                                thread.setDaemon(true);
+                                return thread;
+                            });
         }
 
         public ObservableEmitter<T> getEmitter() {
             return emitter;
+        }
+
+        public void onNext(T message, long enqueueMs, Long exchangeMs, String messageHash) {
+            try {
+                dispatcher.execute(
+                        () -> {
+                            long subscriberStartMs = System.currentTimeMillis();
+                            if (LATENCY_PROBE) {
+                                LOG.info(
+                                        "XCHANGE_STREAM_LATENCY_PROBE stage=subscriber_onnext_start channel={} exchange_ms={} enqueue_ms={} subscriber_start_ms={} enqueue_to_subscriber_ms={} exchange_to_subscriber_ms={} message_hash={} thread={}",
+                                        channelName,
+                                        exchangeMs,
+                                        enqueueMs,
+                                        subscriberStartMs,
+                                        subscriberStartMs - enqueueMs,
+                                        exchangeMs == null ? null : subscriberStartMs - exchangeMs,
+                                        messageHash,
+                                        Thread.currentThread().getName());
+                            }
+                            if (emitter.isDisposed()) {
+                                return;
+                            }
+                            try {
+                                emitter.onNext(message);
+                            } catch (Throwable t) {
+                                if (!emitter.isDisposed()) {
+                                    emitter.onError(t);
+                                }
+                            }
+                        });
+            } catch (RejectedExecutionException e) {
+                LOG.debug("Dispatcher has been closed for channel {}.", channelName);
+            }
+        }
+
+        public void dispose() {
+            dispatcher.shutdownNow();
         }
     }
 
@@ -423,6 +481,11 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
         return new DefaultHttpHeaders();
     }
 
+    private void clearChannels() {
+        channels.values().forEach(Subscription::dispose);
+        channels.clear();
+    }
+
     public Completable disconnect() {
         isManualDisconnect.set(true);
         return Completable.create(
@@ -433,7 +496,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                 .writeAndFlush(closeFrame)
                                 .addListener(
                                         future -> {
-                                            channels.clear();
+                                            clearChannels();
                                             eventLoopGroup
                                                     .shutdownGracefully(2, idleTimeoutSeconds, TimeUnit.SECONDS)
                                                     .addListener(
@@ -445,7 +508,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                                             });
                                         });
                     } else if (webSocketChannel != null) { // web socket is closed already
-                        channels.clear();
+                        clearChannels();
                         eventLoopGroup
                                 .shutdownGracefully(2, idleTimeoutSeconds, TimeUnit.SECONDS)
                                 .addListener(
@@ -616,7 +679,9 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         })
                 .doOnDispose(
                         () -> {
-                            if (channels.remove(subscriptionUniqueId) != null) {
+                            Subscription subscription = channels.remove(subscriptionUniqueId);
+                            if (subscription != null) {
+                                subscription.dispose();
                                 try {
                                     sendMessage(getUnsubscribeMessage(subscriptionUniqueId, args));
                                 } catch (IOException e) {
@@ -679,6 +744,14 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
         }
     }
 
+    protected Long latencyProbeExchangeTimestampMillis(T message) {
+        return null;
+    }
+
+    protected String latencyProbeMessageHash(T message) {
+        return Integer.toHexString(System.identityHashCode(message));
+    }
+
     protected void handleError(T message, Throwable t) {
         String channel = getChannel(message);
         if (!StringUtil.isNullOrEmpty(channel)) {
@@ -720,7 +793,19 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
             LOG.debug("No subscriber for channel {}.", channel);
             return;
         }
-        emitter.onNext(message);
+        long enqueueMs = System.currentTimeMillis();
+        Long exchangeMs = LATENCY_PROBE ? latencyProbeExchangeTimestampMillis(message) : null;
+        String messageHash = LATENCY_PROBE ? latencyProbeMessageHash(message) : null;
+        if (LATENCY_PROBE) {
+            LOG.info(
+                    "XCHANGE_STREAM_LATENCY_PROBE stage=channel_enqueue channel={} exchange_ms={} enqueue_ms={} exchange_to_enqueue_ms={} message_hash={}",
+                    channel,
+                    exchangeMs,
+                    enqueueMs,
+                    exchangeMs == null ? null : enqueueMs - exchangeMs,
+                    messageHash);
+        }
+        subscription.onNext(message, enqueueMs, exchangeMs, messageHash);
     }
 
     protected void handleChannelError(String channel, Throwable t) {

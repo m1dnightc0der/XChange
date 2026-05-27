@@ -1,5 +1,7 @@
 package info.bitrich.xchangestream.service.netty;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
@@ -20,6 +22,9 @@ import org.slf4j.LoggerFactory;
 
 public class WebSocketClientHandler extends SimpleChannelInboundHandler<Object> {
   private static final Logger LOG = LoggerFactory.getLogger(WebSocketClientHandler.class);
+  public static final String LATENCY_PROBE_PROPERTY = "xchangestream.latencyProbe";
+  private static final boolean LATENCY_PROBE = Boolean.getBoolean(LATENCY_PROBE_PROPERTY);
+  private static final ObjectMapper PROBE_OBJECT_MAPPER = StreamingObjectMapperHelper.getObjectMapper();
   private final StringBuilder currentMessage = new StringBuilder();
 
   public interface WebSocketMessageHandler {
@@ -98,7 +103,7 @@ public class WebSocketClientHandler extends SimpleChannelInboundHandler<Object> 
 
   private void dealWithTextFrame(TextWebSocketFrame frame) {
     if (frame.isFinalFragment()) {
-      handler.onMessage(frame.text());
+      dispatchMessage(frame.text());
       return;
     }
     currentMessage.append(frame.text());
@@ -107,9 +112,90 @@ public class WebSocketClientHandler extends SimpleChannelInboundHandler<Object> 
   private void dealWithContinuation(ContinuationWebSocketFrame frame) {
     currentMessage.append(frame.text());
     if (frame.isFinalFragment()) {
-      handler.onMessage(currentMessage.toString());
+      dispatchMessage(currentMessage.toString());
       currentMessage.setLength(0);
     }
+  }
+
+  private void dispatchMessage(String message) {
+    long receiveMs = System.currentTimeMillis();
+    if (LATENCY_PROBE) {
+      logLatencyProbe(message, receiveMs);
+    }
+    handler.onMessage(message);
+  }
+
+  private void logLatencyProbe(String message, long receiveMs) {
+    try {
+      JsonNode jsonNode = PROBE_OBJECT_MAPPER.readTree(message);
+      Long exchangeMs = extractTimestampMillis(jsonNode);
+      String channel = extractTextField(jsonNode, "channel");
+      LOG.info(
+          "XCHANGE_STREAM_LATENCY_PROBE stage=websocket_receive channel={} exchange_ms={} receive_ms={} exchange_to_receive_ms={} message_hash={} message_length={}",
+          channel,
+          exchangeMs,
+          receiveMs,
+          exchangeMs == null ? null : receiveMs - exchangeMs,
+          Integer.toHexString(message.hashCode()),
+          message.length());
+    } catch (Exception e) {
+      LOG.info(
+          "XCHANGE_STREAM_LATENCY_PROBE stage=websocket_receive channel=null exchange_ms=null receive_ms={} exchange_to_receive_ms=null message_hash={} message_length={} parse_error={}",
+          receiveMs,
+          Integer.toHexString(message.hashCode()),
+          message.length(),
+          e.toString());
+    }
+  }
+
+  private static Long extractTimestampMillis(JsonNode node) {
+    JsonNode timestamp = findField(node, "timestamp");
+    if (timestamp == null || !timestamp.isNumber()) {
+      return null;
+    }
+    long value = timestamp.asLong();
+    if (value > 100_000_000_000_000_000L) {
+      return value / 1_000_000L;
+    }
+    if (value > 100_000_000_000_000L) {
+      return value / 1_000L;
+    }
+    if (value < 10_000_000_000L) {
+      return value * 1_000L;
+    }
+    return value;
+  }
+
+  private static String extractTextField(JsonNode node, String fieldName) {
+    JsonNode field = findField(node, fieldName);
+    return field == null || field.isNull() ? null : field.asText();
+  }
+
+  private static JsonNode findField(JsonNode node, String fieldName) {
+    if (node == null || node.isNull()) {
+      return null;
+    }
+    if (node.isObject()) {
+      JsonNode direct = node.get(fieldName);
+      if (direct != null) {
+        return direct;
+      }
+      java.util.Iterator<JsonNode> values = node.elements();
+      while (values.hasNext()) {
+        JsonNode found = findField(values.next(), fieldName);
+        if (found != null) {
+          return found;
+        }
+      }
+    } else if (node.isArray()) {
+      for (JsonNode child : node) {
+        JsonNode found = findField(child, fieldName);
+        if (found != null) {
+          return found;
+        }
+      }
+    }
+    return null;
   }
 
   @Override

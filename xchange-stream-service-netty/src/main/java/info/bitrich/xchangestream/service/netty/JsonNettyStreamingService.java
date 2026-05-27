@@ -56,6 +56,57 @@ public abstract class JsonNettyStreamingService extends NettyStreamingService<Js
     }
   }
 
+  @Override
+  protected Long latencyProbeExchangeTimestampMillis(JsonNode message) {
+    JsonNode timestamp = findField(message, "timestamp");
+    if (timestamp == null || !timestamp.isNumber()) {
+      return null;
+    }
+    long value = timestamp.asLong();
+    if (value > 100_000_000_000_000_000L) {
+      return value / 1_000_000L;
+    }
+    if (value > 100_000_000_000_000L) {
+      return value / 1_000L;
+    }
+    if (value < 10_000_000_000L) {
+      return value * 1_000L;
+    }
+    return value;
+  }
+
+  @Override
+  protected String latencyProbeMessageHash(JsonNode message) {
+    return Integer.toHexString(message.toString().hashCode());
+  }
+
+  private static JsonNode findField(JsonNode node, String fieldName) {
+    if (node == null || node.isNull()) {
+      return null;
+    }
+    if (node.isObject()) {
+      JsonNode direct = node.get(fieldName);
+      if (direct != null) {
+        return direct;
+      }
+      java.util.Iterator<JsonNode> values = node.elements();
+      while (values.hasNext()) {
+        JsonNode found = findField(values.next(), fieldName);
+        if (found != null) {
+          return found;
+        }
+      }
+    } else if (node.isArray()) {
+      for (JsonNode child : node) {
+        JsonNode found = findField(child, fieldName);
+        if (found != null) {
+          return found;
+        }
+      }
+    }
+    return null;
+  }
+
   protected void sendObjectMessage(Object message) {
     try {
       sendMessage(objectMapper.writeValueAsString(message));
