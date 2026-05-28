@@ -59,6 +59,9 @@ public class DeribitMarketDataService extends DeribitMarketDataServiceRaw
     } catch (DeribitException ex) {
       throw DeribitAdapters.adapt(ex);
     }
+    if (deribitTicker != null && "delivered".equalsIgnoreCase(deribitTicker.getState())) {
+      throw new ExchangeException("terminal instrument state delivered for " + deribitInstrumentName);
+    }
     return DeribitAdapters.adaptTicker(deribitTicker);
   }
 

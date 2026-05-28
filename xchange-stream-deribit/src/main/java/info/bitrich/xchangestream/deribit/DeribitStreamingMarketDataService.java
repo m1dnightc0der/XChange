@@ -20,6 +20,7 @@ import org.knowm.xchange.deribit.v2.dto.marketdata.*;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.marketdata.*;
 import org.knowm.xchange.dto.trade.LimitOrder;
+import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
@@ -147,6 +148,9 @@ String channelUniqueId=channelName;
                                       jsonNode.get("params").get("data"),
                                       mapper
                                               .getTypeFactory().constructType( DeribitTicker.class));
+                      if (deribitTicker != null && "delivered".equalsIgnoreCase(deribitTicker.getState())) {
+                        return Observable.error(new ExchangeException("terminal instrument state delivered for " + instId));
+                      }
                       return Observable.just(
                               DeribitAdapters.adaptTicker(deribitTicker));
                     });

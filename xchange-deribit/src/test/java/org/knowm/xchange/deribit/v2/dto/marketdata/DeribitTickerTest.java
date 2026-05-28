@@ -10,6 +10,24 @@ import org.junit.Test;
 public class DeribitTickerTest {
 
   @Test
+  public void deserializeDeliveredTickerWithExpiredEstimatedDeliveryPrice() throws Exception {
+    String json = "{\"timestamp\":1779868812392,\"state\":\"delivered\"," 
+        + "\"interest_rate\":0,\"index_price\":75864.73,\"instrument_name\":\"BTC-27MAY26-66000-C\","
+        + "\"last_price\":null,\"min_price\":0.1145,\"max_price\":0.144,\"open_interest\":0.0,"
+        + "\"mark_price\":0.1294,\"best_ask_price\":0.0,\"best_bid_price\":0.0,\"mark_iv\":72.05,"
+        + "\"bid_iv\":0.0,\"ask_iv\":0.0,\"underlying_price\":75807.47,\"underlying_index\":\"SYN.EXPIRY\","
+        + "\"estimated_delivery_price\":\"expired\",\"delivery_price\":75807.47,\"best_ask_amount\":0.0,\"best_bid_amount\":0.0}";
+
+    ObjectMapper mapper = new ObjectMapper();
+    DeribitTicker ticker = mapper.readValue(json, DeribitTicker.class);
+
+    assertThat(ticker.getState()).isEqualTo("delivered");
+    assertThat(ticker.getInstrumentName()).isEqualTo("BTC-27MAY26-66000-C");
+    assertThat(ticker.getDeliveryPrice()).isEqualTo(new BigDecimal("75807.47"));
+    assertThat(ticker.getEstimatedDeliveryPrice()).isNull();
+  }
+
+  @Test
   public void deserializeTradeTest() throws Exception {
 
     // given

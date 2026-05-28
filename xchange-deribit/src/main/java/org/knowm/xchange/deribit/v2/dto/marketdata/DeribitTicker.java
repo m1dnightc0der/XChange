@@ -45,6 +45,21 @@ public class DeribitTicker  {
   @JsonProperty("estimated_delivery_price")
   private BigDecimal estimatedDeliveryPrice;
 
+  @JsonProperty("estimated_delivery_price")
+  public void setEstimatedDeliveryPrice(Object value) {
+    if (value == null) {
+      this.estimatedDeliveryPrice = null;
+    } else if (value instanceof BigDecimal) {
+      this.estimatedDeliveryPrice = (BigDecimal) value;
+    } else if (value instanceof Number) {
+      this.estimatedDeliveryPrice = new BigDecimal(value.toString());
+    } else if ("expired".equalsIgnoreCase(value.toString())) {
+      this.estimatedDeliveryPrice = null;
+    } else {
+      this.estimatedDeliveryPrice = new BigDecimal(value.toString());
+    }
+  }
+
   /** Current funding (perpetual only) */
   @JsonProperty("current_funding")
   private BigDecimal currentFunding;
