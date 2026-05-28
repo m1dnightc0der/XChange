@@ -1,15 +1,27 @@
 package org.knowm.xchange.deribit.v2.dto.trade;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import lombok.Data;
 import org.knowm.xchange.deribit.v2.dto.Direction;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 @Data
 public class Order {
   /** Order time in force: "good_til_cancelled", "fill_or_kill", "immediate_or_cancel" */
   @JsonProperty("time_in_force")
-  private TimeInForce time_in_force;
+  private String timeInForce;
+
+  public TimeInForce getTimeInForceEnum() {
+    return timeInForce == null ? null : TimeInForce.parseTimeInForce(timeInForce);
+  }
+
+  @JsonIgnore
+  public TimeInForce getTime_in_force() {
+    return getTimeInForceEnum();
+  }
 
   /** true for reduce-only orders only */
   @JsonProperty("reduce_only")
