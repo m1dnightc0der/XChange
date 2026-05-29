@@ -125,7 +125,7 @@ public class ExecutionReportBinanceUserTransaction extends ProductBinanceWebSock
             lastExecutedQuantity,
             cumulativeFilledQuantity,
             currentOrderStatus,
-            timeInForce,
+            timeInForce == null ? null : timeInForce.name(),
             orderType,
             side,
             stopPrice,

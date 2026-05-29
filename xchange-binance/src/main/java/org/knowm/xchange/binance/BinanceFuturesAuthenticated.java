@@ -441,7 +441,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
   @Path("fapi/v1/order")
   BinanceOrder futureOrderStatus(
       @QueryParam("symbol") String symbol,
-      @QueryParam("orderId") long orderId,
+      @QueryParam("orderId") Long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
       @QueryParam("recvWindow") Long recvWindow,
       @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
@@ -468,7 +468,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
   @Path("dapi/v1/order")
   BinanceOrder futureInverseOrderStatus(
       @QueryParam("symbol") String symbol,
-      @QueryParam("orderId") long orderId,
+      @QueryParam("orderId") Long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
       @QueryParam("recvWindow") Long recvWindow,
       @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
@@ -495,7 +495,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
   @Path("/papi/v1/um/order")
   BinanceOrder futurePortfolioMarginOrderStatus(
       @QueryParam("symbol") String symbol,
-      @QueryParam("orderId") long orderId,
+      @QueryParam("orderId") Long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
       @QueryParam("recvWindow") Long recvWindow,
       @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
@@ -522,7 +522,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
   @Path("/papi/v1/cm/order")
   BinanceOrder futurePortfolioMarginInverseOrderStatus(
       @QueryParam("symbol") String symbol,
-      @QueryParam("orderId") long orderId,
+      @QueryParam("orderId") Long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
       @QueryParam("recvWindow") Long recvWindow,
       @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,

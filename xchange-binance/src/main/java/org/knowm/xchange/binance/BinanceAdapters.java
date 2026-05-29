@@ -554,26 +554,30 @@ else
    */
   public synchronized static CandleStickData adaptBinanceCandleStickData(
       List<BinanceKline> klines, CurrencyPair currencyPair) {
+    return adaptBinanceCandleStickData(klines, (Instrument) currencyPair);
+  }
 
-    CandleStickData candleStickData = null;
-    if (klines.size() != 0) {
-      List<CandleStick> candleSticks = new ArrayList<>();
-      for (BinanceKline chartData : klines) {
-        candleSticks.add(
-            new CandleStick.Builder()
-                .timestamp(new Date(chartData.getCloseTime()))
-                .open(chartData.getOpen())
-                .high(chartData.getHigh())
-                .low(chartData.getLow())
-                .close(chartData.getClose())
-                .volume(chartData.getVolume())
-                .quotaVolume(chartData.getQuoteAssetVolume())
-                .build());
-      }
-      candleStickData = new CandleStickData(currencyPair, candleSticks);
+  public synchronized static CandleStickData adaptBinanceCandleStickData(
+      List<BinanceKline> klines, Instrument instrument) {
+
+    if (klines == null || klines.isEmpty()) {
+      return new CandleStickData(instrument, Collections.emptyList());
     }
 
-    return candleStickData;
+    List<CandleStick> candleSticks = new ArrayList<>();
+    for (BinanceKline chartData : klines) {
+      candleSticks.add(
+          new CandleStick.Builder()
+              .timestamp(new Date(chartData.getOpenTime()))
+              .open(chartData.getOpen())
+              .high(chartData.getHigh())
+              .low(chartData.getLow())
+              .close(chartData.getClose())
+              .volume(chartData.getVolume())
+              .quotaVolume(chartData.getQuoteAssetVolume())
+              .build());
+    }
+    return new CandleStickData(instrument, candleSticks);
   }
 
   public static void adaptFutureExchangeMetaData(

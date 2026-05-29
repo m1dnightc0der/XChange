@@ -1,5 +1,6 @@
 package org.knowm.xchange.binance.dto.trade;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
@@ -16,7 +17,7 @@ public final class BinanceOrder {
   public final BigDecimal executedQty;
   public final BigDecimal cummulativeQuoteQty;
   public final OrderStatus status;
-  public final TimeInForce timeInForce;
+  public final String timeInForce;
   public final OrderType type;
   public final OrderSide side;
   public final BigDecimal stopPrice;
@@ -33,7 +34,7 @@ public final class BinanceOrder {
       @JsonProperty("executedQty") BigDecimal executedQty,
       @JsonProperty("cummulativeQuoteQty") BigDecimal cummulativeQuoteQty,
       @JsonProperty("status") OrderStatus status,
-      @JsonProperty("timeInForce") TimeInForce timeInForce,
+      @JsonProperty("timeInForce") String timeInForce,
       @JsonProperty("type") OrderType type,
       @JsonProperty("side") OrderSide side,
       @JsonProperty("stopPrice") BigDecimal stopPrice,
@@ -55,6 +56,15 @@ public final class BinanceOrder {
     this.icebergQty = icebergQty;
     this.time = time;
     this.avgPrice=avgPrice;
+  }
+
+  public TimeInForce getTimeInForceEnum() {
+    return timeInForce == null ? null : TimeInForce.getTimeInForce(timeInForce);
+  }
+
+  @JsonIgnore
+  public TimeInForce getTimeInForce() {
+    return getTimeInForceEnum();
   }
 
   public Date getTime() {

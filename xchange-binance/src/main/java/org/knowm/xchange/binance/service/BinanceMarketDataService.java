@@ -2,6 +2,7 @@ package org.knowm.xchange.binance.service;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.function.Function;
@@ -12,10 +13,12 @@ import org.knowm.xchange.binance.BinanceExchange;
 import org.knowm.xchange.binance.dto.BinanceException;
 import org.knowm.xchange.binance.dto.marketdata.BinanceOrderbook;
 import org.knowm.xchange.binance.dto.marketdata.BinanceTicker24h;
+import org.knowm.xchange.binance.dto.marketdata.KlineInterval;
 import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.Order.OrderType;
+import org.knowm.xchange.dto.marketdata.CandleStickData;
 import org.knowm.xchange.dto.marketdata.FundingRate;
 import org.knowm.xchange.dto.marketdata.FundingRates;
 import org.knowm.xchange.dto.marketdata.OrderBook;
@@ -23,9 +26,13 @@ import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trades;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.service.marketdata.MarketDataService;
 import org.knowm.xchange.service.marketdata.params.Params;
+import org.knowm.xchange.service.trade.params.CandleStickDataParams;
+import org.knowm.xchange.service.trade.params.DefaultCandleStickParam;
+import org.knowm.xchange.service.trade.params.DefaultCandleStickParamWithLimit;
 
 public class BinanceMarketDataService extends BinanceMarketDataServiceRaw
     implements MarketDataService {
@@ -101,6 +108,49 @@ public class BinanceMarketDataService extends BinanceMarketDataServiceRaw
   @Override
   public FundingRate getFundingRate(Instrument instrument) throws IOException {
     return BinanceAdapters.adaptFundingRate(getBinanceFundingRate(instrument));
+  }
+
+  @Override
+  public CandleStickData getCandleStickData(Instrument instrument, CandleStickDataParams params)
+      throws IOException {
+    boolean futures = instrument instanceof FuturesContract || exchange.isFuturesEnabled();
+    if (!futures) {
+      throw new NotYetImplementedForExchangeException(
+          "Binance getCandleStickData currently supports USD-M futures only");
+    }
+    if (instrument instanceof FuturesContract && BinanceAdapters.isInverse((FuturesContract) instrument)) {
+      throw new NotYetImplementedForExchangeException(
+          "Binance COIN-M futures candlesticks are not implemented by this method");
+    }
+    if (!(params instanceof DefaultCandleStickParam)) {
+      throw new NotYetImplementedForExchangeException("Only DefaultCandleStickParam is supported");
+    }
+
+    DefaultCandleStickParam candleParams = (DefaultCandleStickParam) params;
+    KlineInterval interval = KlineInterval.getPeriodTypeFromSecs(candleParams.getPeriodInSecs());
+    if (interval == null) {
+      throw new NotYetImplementedForExchangeException(
+          "Only Binance kline intervals are supported: "
+              + Arrays.toString(KlineInterval.values()));
+    }
+
+    Integer limit = null;
+    if (params instanceof DefaultCandleStickParamWithLimit) {
+      limit = ((DefaultCandleStickParamWithLimit) params).getLimit();
+    }
+
+    try {
+      return BinanceAdapters.adaptBinanceCandleStickData(
+          klinesAllProducts(
+              instrument,
+              interval,
+              limit,
+              candleParams.getStartDate().getTime(),
+              candleParams.getEndDate().getTime()),
+          instrument);
+    } catch (BinanceException e) {
+      throw BinanceErrorAdapter.adapt(e);
+    }
   }
 
   private Trades getBinanceTrades(Instrument instrument, Object... args) throws IOException {

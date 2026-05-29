@@ -20,10 +20,13 @@ import org.knowm.xchange.binance.dto.meta.exchangeinfo.BinanceExchangeInfo;
 import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
+import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.utils.StreamUtils;
 
 public class BinanceMarketDataServiceRaw extends BinanceBaseService {
+
+  protected static final int FUTURES_KLINES_MAX_LIMIT = 1500;
 
   protected BinanceMarketDataServiceRaw(
       BinanceExchange exchange, ResilienceRegistries resilienceRegistries) {
@@ -108,6 +111,46 @@ public class BinanceMarketDataServiceRaw extends BinanceBaseService {
         .collect(Collectors.toList());
   }
 
+  public List<BinanceKline> klinesAllProducts(
+      Instrument instrument,
+      KlineInterval interval,
+      Integer limit,
+      Long startTime,
+      Long endTime)
+      throws IOException {
+    boolean futures = instrument instanceof FuturesContract || exchange.isFuturesEnabled();
+    if (!futures) {
+      if (!(instrument instanceof CurrencyPair)) {
+        throw new NotYetImplementedForExchangeException(
+            "Spot klines require CurrencyPair instruments");
+      }
+      return klines((CurrencyPair) instrument, interval, limit, startTime, endTime);
+    }
+
+    if (instrument instanceof FuturesContract && BinanceAdapters.isInverse((FuturesContract) instrument)) {
+      throw new NotYetImplementedForExchangeException(
+          "COIN-M futures klines are not implemented; this method supports USD-M futures only");
+    }
+
+    int requestLimit = limit == null ? FUTURES_KLINES_MAX_LIMIT : Math.min(limit, FUTURES_KLINES_MAX_LIMIT);
+    List<Object[]> raw =
+        decorateApiCall(
+                () ->
+                    binanceFutures.klines(
+                        BinanceAdapters.toSymbol(instrument),
+                        interval.code(),
+                        requestLimit,
+                        startTime,
+                        endTime))
+            .withRetry(retry("futuresKlines"))
+            .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER), futuresKlinesPermits(requestLimit))
+            .call();
+
+    return raw.stream()
+        .map(obj -> new BinanceKline(instrument, interval, obj))
+        .collect(Collectors.toList());
+  }
+
   public List<BinanceTicker24h> ticker24hAllProducts(boolean isFutures) throws IOException {
     if(isFutures)
       return decorateApiCall(binanceFutures::ticker24h)
@@ -177,6 +220,17 @@ public class BinanceMarketDataServiceRaw extends BinanceBaseService {
       return 10;
     }
     return 50;
+  }
+
+  protected int futuresKlinesPermits(Integer limit) {
+    if (limit == null || limit < 100) {
+      return 1;
+    } else if (limit < 500) {
+      return 2;
+    } else if (limit <= 1000) {
+      return 5;
+    }
+    return 10;
   }
 
   protected int aggTradesPermits(Integer limit) {

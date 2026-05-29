@@ -304,34 +304,55 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
     }
   }
 
-  @Override
-  public Collection<Order> getOrder(OrderQueryParams... params) throws IOException {
+  public Order getOrder(OrderQueryParams orderQueryParams) throws IOException {
     try {
-      Collection<Order> orders = new ArrayList<>();
-      for (OrderQueryParams param : params) {
-        if (!(param instanceof OrderQueryParamInstrument)) {
-          throw new ExchangeException(
-              "Parameters must be an instance of OrderQueryParamInstrument");
-        }
-        OrderQueryParamInstrument orderQueryParamInstrument = (OrderQueryParamInstrument) param;
-        if (orderQueryParamInstrument.getInstrument() == null
-            || orderQueryParamInstrument.getOrderId() == null) {
-          throw new ExchangeException(
-              "You need to provide the currency pair and the order id to query an order.");
-        }
+      Instrument instrument;
+      Long orderId = null;
+      String origClientOrderId = null;
 
-        orders.add(
-            BinanceAdapters.adaptOrder(
-                orderStatusAllProducts(
-                    orderQueryParamInstrument.getInstrument(),
-                    BinanceAdapters.id(orderQueryParamInstrument.getOrderId()),
-                    null),
-                orderQueryParamInstrument.getInstrument() instanceof FuturesContract));
+      if (orderQueryParams instanceof ClientOrderIdQueryParamInstrument) {
+        instrument = ((ClientOrderIdQueryParamInstrument) orderQueryParams).getInstrument();
+        origClientOrderId = blankToNull(orderQueryParams.getOrderId());
+      } else if (orderQueryParams instanceof OrderQueryParamInstrument) {
+        instrument = ((OrderQueryParamInstrument) orderQueryParams).getInstrument();
+        String rawOrderId = blankToNull(orderQueryParams.getOrderId());
+        if (rawOrderId != null) {
+          orderId = BinanceAdapters.id(rawOrderId);
+        }
+      } else {
+        throw new IOException("OrderQueryParams must implement OrderQueryParamInstrument or ClientOrderIdQueryParamInstrument interface.");
       }
-      return orders;
+
+      if (instrument == null) {
+        throw new ExchangeException("You need to provide the instrument to query an order.");
+      }
+      if (orderId == null && origClientOrderId == null) {
+        throw new ExchangeException("Either orderId or origClientOrderId must be provided to query a Binance order.");
+      }
+
+      BinanceOrder binanceOrder = orderStatusAllProducts(instrument, orderId, origClientOrderId);
+      return binanceOrder == null
+          ? null
+          : BinanceAdapters.adaptOrder(binanceOrder, instrument instanceof FuturesContract);
     } catch (BinanceException e) {
       throw BinanceErrorAdapter.adapt(e);
     }
+  }
+
+  @Override
+  public Collection<Order> getOrder(OrderQueryParams... params) throws IOException {
+    Collection<Order> orders = new ArrayList<>();
+    for (OrderQueryParams param : params) {
+      Order order = getOrder(param);
+      if (order != null) {
+        orders.add(order);
+      }
+    }
+    return orders;
+  }
+
+  private static String blankToNull(String value) {
+    return value == null || value.trim().isEmpty() ? null : value;
   }
 
   @Override

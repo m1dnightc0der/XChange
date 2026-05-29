@@ -104,6 +104,21 @@ public interface BinanceFutures {
       throws IOException, BinanceException;
 
   /**
+   * Kline/candlestick bars for a USD-M futures symbol. Klines are uniquely identified by open time.
+   *
+   * <p>Binance docs: GET /fapi/v1/klines. Limit defaults to 500 and maxes at 1500.
+   */
+  @GET
+  @Path("fapi/v1/klines")
+  List<Object[]> klines(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("interval") String interval,
+      @QueryParam("limit") Integer limit,
+      @QueryParam("startTime") Long startTime,
+      @QueryParam("endTime") Long endTime)
+      throws IOException, BinanceException;
+
+  /**
    * @return List<BinanceFundingRate>
    * @throws IOException
    * @throws BinanceException

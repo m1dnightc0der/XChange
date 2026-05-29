@@ -32,6 +32,10 @@ public final class BinanceErrorAdapter {
       case -1010:
       case -2010:
       case -2011:
+      case -2019:
+        if (e.getCode() == -2019) {
+          return new FundsExceededException(message, e);
+        }
         if (e.getMessage().contains("insufficient balance")) {
           return new FundsExceededException(e.getMessage(), e);
         } else {
