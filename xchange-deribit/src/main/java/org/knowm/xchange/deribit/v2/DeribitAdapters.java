@@ -23,6 +23,7 @@ import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.trade.*;
 import org.knowm.xchange.exceptions.CurrencyPairNotValidException;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.RateLimitExceededException;
 import org.knowm.xchange.instrument.Instrument;
 
 import java.math.BigDecimal;
@@ -286,10 +287,15 @@ public class DeribitAdapters {
                 && isNotEmpty(error.getMessage())) {
 
             int code = error.getCode();
-            String msg = error.getMessage();
-            String data = error.getData().toString();
+            String msg = code + ": " + error.getMessage();
+            Object rawData = error.getData();
+            String data = rawData == null ? null : rawData.toString();
             if (isNotEmpty(data)) {
                 msg += " - " + data;
+            }
+
+            if (isDeribitRateLimitError(code, error.getMessage(), ex.getMessage())) {
+                return new RateLimitExceededException(msg, ex);
             }
 
             switch (code) {
@@ -300,6 +306,20 @@ public class DeribitAdapters {
             }
         }
         return new ExchangeException("Operation failed without any error message", ex);
+    }
+
+    private static boolean isDeribitRateLimitError(int code, String errorMessage, String exceptionMessage) {
+        if (code == 10028 || code == 100028) {
+            return true;
+        }
+        if (errorMessage != null) {
+            String normalizedErrorMessage = errorMessage.toLowerCase(Locale.ROOT);
+            if ("too_many_requests".equalsIgnoreCase(errorMessage)
+                    || normalizedErrorMessage.contains("http status code: 429")) {
+                return true;
+            }
+        }
+        return exceptionMessage != null && exceptionMessage.toLowerCase(Locale.ROOT).contains("http status code: 429");
     }
 
     public static Balance adapt(AccountSummary as) {

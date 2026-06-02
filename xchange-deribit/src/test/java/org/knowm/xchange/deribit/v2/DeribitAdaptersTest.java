@@ -1,12 +1,15 @@
 package org.knowm.xchange.deribit.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import org.junit.Test;
+import org.knowm.xchange.deribit.v2.dto.DeribitError;
+import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitOrderBook;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTicker;
 import org.knowm.xchange.deribit.v2.dto.marketdata.DeribitTrade;
@@ -16,6 +19,8 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 import org.knowm.xchange.dto.marketdata.Trade;
+import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.RateLimitExceededException;
 import org.knowm.xchange.instrument.Instrument;
 
 public class DeribitAdaptersTest {
@@ -134,5 +139,70 @@ public class DeribitAdaptersTest {
 
     assertThat(trade.getTimestamp().getTime()).isEqualTo(1550050591859L);
     assertThat(trade.getId()).isEqualTo("48470");
+  }
+
+  @Test
+  public void adaptDeribit10028TooManyRequestsWithNullDataReturnsRateLimitExceededException() {
+    DeribitError error = new DeribitError();
+    error.setCode(10028);
+    error.setMessage("too_many_requests");
+    error.setData(null);
+
+    DeribitException deribitException = new DeribitException(error);
+
+    assertThatCode(() -> {
+      ExchangeException adapted = DeribitAdapters.adapt(deribitException);
+      assertThat(adapted).isInstanceOf(RateLimitExceededException.class);
+      assertThat(adapted.getMessage()).contains("10028");
+      assertThat(adapted.getMessage()).contains("too_many_requests");
+    }).doesNotThrowAnyException();
+  }
+
+  @Test
+  public void adaptDeribit100028TooManyRequestsWithNullDataReturnsRateLimitExceededException() {
+    DeribitError error = new DeribitError();
+    error.setCode(100028);
+    error.setMessage("too_many_requests");
+    error.setData(null);
+
+    DeribitException deribitException = new DeribitException(error);
+
+    ExchangeException adapted = DeribitAdapters.adapt(deribitException);
+
+    assertThat(adapted).isInstanceOf(RateLimitExceededException.class);
+    assertThat(adapted.getMessage()).contains("100028");
+    assertThat(adapted.getMessage()).contains("too_many_requests");
+  }
+
+  @Test
+  public void adaptDeribitTooManyRequestsWithDataReturnsRateLimitExceededException() {
+    DeribitError error = new DeribitError();
+    error.setCode(10028);
+    error.setMessage("too_many_requests");
+    error.setData("quota exceeded");
+
+    DeribitException deribitException = new DeribitException(error);
+
+    ExchangeException adapted = DeribitAdapters.adapt(deribitException);
+
+    assertThat(adapted).isInstanceOf(RateLimitExceededException.class);
+    assertThat(adapted.getMessage()).contains("10028");
+    assertThat(adapted.getMessage()).contains("too_many_requests");
+    assertThat(adapted.getMessage()).contains("quota exceeded");
+  }
+
+  @Test
+  public void adaptDeribitHttp429MessageReturnsRateLimitExceededException() {
+    DeribitError error = new DeribitError();
+    error.setCode(0);
+    error.setMessage("rate limited (HTTP status code: 429)");
+    error.setData(null);
+
+    DeribitException deribitException = new DeribitException(error);
+
+    ExchangeException adapted = DeribitAdapters.adapt(deribitException);
+
+    assertThat(adapted).isInstanceOf(RateLimitExceededException.class);
+    assertThat(adapted.getMessage()).contains("HTTP status code: 429");
   }
 }
