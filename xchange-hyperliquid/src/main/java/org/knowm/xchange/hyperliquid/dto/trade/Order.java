@@ -1,5 +1,6 @@
 package org.knowm.xchange.hyperliquid.dto.trade;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
@@ -10,8 +11,17 @@ import java.util.List;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class Order {
-    @JsonProperty("tif")
-  private TimeInForce tif;
+  @JsonProperty("tif")
+  private String tif;
+
+  public TimeInForce getTimeInForceEnum() {
+    return tif == null ? null : TimeInForce.parseTimeInForce(tif);
+  }
+
+  @JsonIgnore
+  public TimeInForce getTimeInForce() {
+    return getTimeInForceEnum();
+  }
 
   /** true for reduce-only orders only */
   @JsonProperty("reduceOnly")
