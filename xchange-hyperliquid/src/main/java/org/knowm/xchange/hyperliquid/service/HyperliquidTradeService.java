@@ -7,6 +7,7 @@ import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
 import org.knowm.xchange.dto.trade.OpenOrders;
 import org.knowm.xchange.dto.trade.UserTrades;
+import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
@@ -109,7 +110,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (orderId != null) {
                     return orderId.toString();
                 } else if (status.hasError()) {
-                    throw new IOException("Order placement failed: " + status.getError());
+                    throw new ExchangeException("Order placement failed: " + status.getError());
                 } else {
                     throw new IOException("Order placement failed: no order ID returned");
                 }
@@ -117,7 +118,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 throw new IOException("Order placement failed: invalid response structure");
             }
         } else if (rawResponse != null && rawResponse.isError()) {
-            throw new IOException("Order placement failed: " + rawResponse.getErrorMessage());
+            throw new ExchangeException("Order placement failed: " + rawResponse.getErrorMessage());
         } else {
             throw new IOException("Failed to place limit order - no response received");
         }
@@ -182,7 +183,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (newOrderId != null) {
                     return newOrderId.toString();
                 } else if (status.hasError()) {
-                    throw new IOException("Order modification failed: " + status.getError());
+                    throw new ExchangeException("Order modification failed: " + status.getError());
                 } else {
                     throw new IOException("Order modification failed: no order ID returned");
                 }
@@ -192,7 +193,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 throw new IOException("Order modification failed: invalid response structure");
             }
         } else if (rawResponse != null && rawResponse.isError()) {
-            throw new IOException("Order modification failed: " + rawResponse.getErrorMessage());
+            throw new ExchangeException("Order modification failed: " + rawResponse.getErrorMessage());
         } else {
             throw new IOException("Failed to modify order - no response received");
         }
