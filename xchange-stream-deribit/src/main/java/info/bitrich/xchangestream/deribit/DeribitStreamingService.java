@@ -135,6 +135,10 @@ isLoggedIn=false;
 
 
 
+  public boolean isPrivateStreamReady() {
+    return isSocketOpen() && isLoggedIn;
+  }
+
   public void login() throws JsonProcessingException, ExecutionException, Exception {
     LOG.debug("login : called from {}", Thread.currentThread().getStackTrace()[2]);
     Mac mac;
@@ -190,12 +194,14 @@ isLoggedIn=false;
 
     if (jsonNode!=null &&  jsonNode.has("result") && jsonNode.get("result").has("access_token")) {
             isLoggedIn = true;
+            LOG.info("Deribit private websocket login succeeded");
 
 
     }
     if (jsonNode!=null &&  jsonNode.has("error") && jsonNode.get("error").has("code")) {
      // if (jsonNode.get("error").get("code").textValue().equals("13004")) {
         isLoggedIn = false;
+        LOG.warn("Deribit private websocket authentication error: {}", jsonNode.get("error"));
       //}
    }
 /*
@@ -301,7 +307,6 @@ isLoggedIn=false;
   @Override
   public String getUnsubscribeMessage(String channelName, Object... args) throws IOException {
     String msg = objectMapper.writeValueAsString(new DeribitSubscribeMessage(UNSUBSCRIBE,(getTopic(channelName))));
-    isLoggedIn=false;
     return msg;
   }
 

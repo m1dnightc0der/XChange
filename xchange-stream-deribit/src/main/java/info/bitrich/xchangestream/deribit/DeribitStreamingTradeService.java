@@ -28,6 +28,7 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.meta.ExchangeMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.instrument.Instrument;
+import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
 
 import org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory;
@@ -68,8 +69,9 @@ public class DeribitStreamingTradeService implements StreamingTradeService {
     DeribitOrderMessage message = new DeribitOrderMessage(((limitOrder.getType() == Order.OrderType.BID || limitOrder.getType() == Order.OrderType.EXIT_ASK) ? "private/buy" :  "private/sell"),id,orderArg);
 
 
-      if (!service.isLoggedIn) {
-        service.login();
+      if (!service.isPrivateStreamReady()) {
+        LOG.warn("Deribit private websocket is not connected and authenticated; refusing streaming order placement");
+        throw new ExchangeException("Deribit private websocket is not connected and authenticated; refusing streaming order placement");
       }
 
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(responseTimeout, MILLISECONDS).blockingSingle();

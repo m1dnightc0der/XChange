@@ -27,9 +27,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static info.bitrich.xchangestream.okex.OkexStreamingService.USERFILLS;
 import static info.bitrich.xchangestream.okex.OkexStreamingService.USERTRADES;
@@ -78,16 +75,9 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         message.setOp("order");
         message.setArgs(orderList);
 
-        // Ensure login is complete before sending order
-        if (!service.isLoggedIn) {
-            try {
-                // Wait for login with a reasonable timeout (5 seconds)
-                service.login().get(5, TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                throw new ExchangeException("Login timed out before placing order", e);
-            } catch (ExecutionException e) {
-                throw new ExchangeException("Login failed: " + e.getCause().getMessage(), e.getCause());
-            }
+        if (!service.isPrivateStreamReady()) {
+            LOG.warn("OKX private websocket is not connected and authenticated; refusing streaming order placement");
+            throw new ExchangeException("OKX private websocket is not connected and authenticated; refusing streaming order placement");
         }
 
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();

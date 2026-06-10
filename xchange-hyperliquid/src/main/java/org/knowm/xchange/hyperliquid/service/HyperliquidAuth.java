@@ -88,6 +88,9 @@ public class HyperliquidAuth extends BaseParamsDigest {
 
     private final String walletAddress;
     private final ObjectMapper msgPackMapper;
+    private final BigInteger privateKey;
+    private final ECDomainParameters domainParams;
+    private final ECPoint publicKey;
     
     // EIP-712 Domain for Hyperliquid L1 Actions
     private static final String DOMAIN_NAME = "Exchange";
@@ -142,6 +145,24 @@ public class HyperliquidAuth extends BaseParamsDigest {
         super(privateKeyHex, HMAC_SHA_256); // Dummy algorithm, we override digestParams
         // Normalize private key format (remove 0x prefix if present)
         this.privateKeyHex = privateKeyHex.startsWith("0x") ? privateKeyHex.substring(2) : privateKeyHex;
+        BigInteger parsedPrivateKey = null;
+        ECDomainParameters parsedDomainParams = null;
+        ECPoint parsedPublicKey = null;
+        try {
+            parsedPrivateKey = new BigInteger(this.privateKeyHex, 16);
+            X9ECParameters curveParams = SECNamedCurves.getByName("secp256k1");
+            parsedDomainParams = new ECDomainParameters(
+                curveParams.getCurve(),
+                curveParams.getG(),
+                curveParams.getN()
+            );
+            parsedPublicKey = parsedDomainParams.getG().multiply(parsedPrivateKey).normalize();
+        } catch (NumberFormatException ignored) {
+            // Preserve legacy behavior: invalid private keys fail when used, not during construction.
+        }
+        this.privateKey = parsedPrivateKey;
+        this.domainParams = parsedDomainParams;
+        this.publicKey = parsedPublicKey;
         this.nonce = nonce;
         this.isMainnet = isMainnet;
 
@@ -490,16 +511,9 @@ public class HyperliquidAuth extends BaseParamsDigest {
      * Applies low-s normalization (EIP-2) to match Ethereum standard
      */
     private ECDSASignature signECDSA(byte[] digest) {
-        BigInteger privateKey = new BigInteger(privateKeyHex, 16);
-
-        // Get secp256k1 curve parameters for recovery ID calculation
-        X9ECParameters curveParams = SECNamedCurves.getByName("secp256k1");
-        ECDomainParameters domainParams = new ECDomainParameters(
-            curveParams.getCurve(),
-            curveParams.getG(),
-            curveParams.getN()
-        );
-
+        if (privateKey == null || domainParams == null || publicKey == null) {
+            throw new ExchangeException("Invalid private key");
+        }
         ECPrivateKeyParameters keyParams = new ECPrivateKeyParameters(privateKey, domainParams);
 
         // Use deterministic ECDSA (RFC 6979) to match Python's eth_account
@@ -514,7 +528,7 @@ public class HyperliquidAuth extends BaseParamsDigest {
         BigInteger s = signature[1];
 
         // Calculate recovery ID before normalization
-        int recoveryId = calculateRecoveryId(r, s, digest, domainParams, privateKey);
+        int recoveryId = calculateRecoveryId(r, s, digest, domainParams);
 
         // Apply low-s normalization (EIP-2) to match Ethereum standard
         // If s > n/2, use n - s instead (prevents signature malleability)
@@ -562,10 +576,7 @@ public class HyperliquidAuth extends BaseParamsDigest {
      * Calculate recovery ID for signature (matching Ethereum's v parameter)
      * Implements ECDSA public key recovery to determine correct v value
      */
-    private int calculateRecoveryId(BigInteger r, BigInteger s, byte[] digest, ECDomainParameters domainParams, BigInteger privateKey) {
-        // Calculate expected public key from private key
-        ECPoint publicKey = domainParams.getG().multiply(privateKey).normalize();
-
+    private int calculateRecoveryId(BigInteger r, BigInteger s, byte[] digest, ECDomainParameters domainParams) {
         // Convert digest to BigInteger
         BigInteger e = new BigInteger(1, digest);
         BigInteger n = domainParams.getN();

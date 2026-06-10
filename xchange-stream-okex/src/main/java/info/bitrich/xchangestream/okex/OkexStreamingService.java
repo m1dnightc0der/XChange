@@ -145,6 +145,10 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   }
 
 
+  public boolean isPrivateStreamReady() {
+    return isSocketOpen() && isLoggedIn;
+  }
+
   public CompletableFuture<Void> login() throws JsonProcessingException, ExecutionException, Exception {
     LOG.debug("login : called from {}", Thread.currentThread().getStackTrace()[2]);
 
@@ -230,6 +234,7 @@ public class OkexStreamingService extends JsonNettyStreamingService {
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("login")) {
       if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("0")) {
         isLoggedIn = true;
+        LOG.info("OKX private websocket login succeeded");
 
         // Complete the login future
         CompletableFuture<Void> future = loginFuture.get();
@@ -251,6 +256,7 @@ public class OkexStreamingService extends JsonNettyStreamingService {
       // Handle authentication errors
       if (errorCode.equals("60011") || errorCode.equals("60031")) {
         isLoggedIn = false;
+        LOG.warn("OKX private websocket authentication error: {} (code: {})", errorMsg, errorCode);
 
         // Complete any pending login future exceptionally
         CompletableFuture<Void> future = loginFuture.get();
@@ -406,7 +412,6 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   public String getUnsubscribeMessage(String channelName, Object... args) throws IOException {
     OkexSubscribeMessage.SubscriptionTopic topic = getTopic(channelName);
     String msg = objectMapper.writeValueAsString(new OkexUnSubscribeMessage(UNSUBSCRIBE, Collections.singletonList(getTopic(channelName))));
-    isLoggedIn=false;
     return msg;
   }
 

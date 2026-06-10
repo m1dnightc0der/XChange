@@ -5,7 +5,9 @@ import org.knowm.xchange.exceptions.ExchangeException;
 import si.mazi.rescu.RestInvocation;
 import si.mazi.rescu.SynchronizedValueFactory;
 
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,6 +32,67 @@ public class HyperliquidAuthTest {
         SynchronizedValueFactory<Long> nonceFactory = mock(SynchronizedValueFactory.class);
         when(nonceFactory.createValue()).thenReturn(1699123456789L); // Fixed timestamp for reproducible tests
         return nonceFactory;
+    }
+
+    private Map<String, Object> goldenOrderAction() {
+        Map<String, Object> limit = new LinkedHashMap<>();
+        limit.put("tif", "Gtc");
+
+        Map<String, Object> orderType = new LinkedHashMap<>();
+        orderType.put("limit", limit);
+
+        Map<String, Object> order = new LinkedHashMap<>();
+        order.put("a", 0);
+        order.put("b", true);
+        order.put("p", "1000");
+        order.put("s", "0.1");
+        order.put("r", false);
+        order.put("t", orderType);
+
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "order");
+        action.put("orders", Arrays.asList(order));
+        action.put("grouping", "na");
+        return action;
+    }
+
+    @Test
+    public void testSignL1ActionMatchesPdfFormulaMainnetVaultGoldenVector() {
+        SynchronizedValueFactory<Long> nonce = createMockNonceFactory();
+        HyperliquidAuth auth = HyperliquidAuth.createHyperliquidAuth(
+            TEST_PRIVATE_KEY, nonce, true, TEST_VAULT_ADDRESS, null);
+
+        Map<String, Object> signature = auth.signL1Action(goldenOrderAction(), 1699123456789L, null);
+
+        assertThat(signature.get("r")).isEqualTo("0x6c11ecfcf2615031f10b71846c6aff42a01784fed2d09d5c28360a1cce8152e");
+        assertThat(signature.get("s")).isEqualTo("0x3aefae87abd283f78298bb3eede12ba680e3c48e4cd3b54cea2b89642060ec3");
+        assertThat(signature.get("v")).isEqualTo(27);
+    }
+
+    @Test
+    public void testSignL1ActionMatchesPdfFormulaTestnetNoVaultGoldenVector() {
+        SynchronizedValueFactory<Long> nonce = createMockNonceFactory();
+        HyperliquidAuth auth = HyperliquidAuth.createHyperliquidAuth(
+            TEST_PRIVATE_KEY, nonce, false, null, null);
+
+        Map<String, Object> signature = auth.signL1Action(goldenOrderAction(), 1699123456789L, null);
+
+        assertThat(signature.get("r")).isEqualTo("0x6b060c3a7e16cf105c0ff049d7c8b685dbdac6722fba06a2b5f27cd21fa2aa88");
+        assertThat(signature.get("s")).isEqualTo("0x71fe8deeffcef66758ae6aac98607a96dddbe4cb3b43ab3afc98b77fe44f402d");
+        assertThat(signature.get("v")).isEqualTo(28);
+    }
+
+    @Test
+    public void testSignL1ActionMatchesPdfFormulaWithExpiresAfterGoldenVector() {
+        SynchronizedValueFactory<Long> nonce = createMockNonceFactory();
+        HyperliquidAuth auth = HyperliquidAuth.createHyperliquidAuth(
+            TEST_PRIVATE_KEY, nonce, true, TEST_VAULT_ADDRESS, null);
+
+        Map<String, Object> signature = auth.signL1Action(goldenOrderAction(), 1699123456789L, 1700000000000L);
+
+        assertThat(signature.get("r")).isEqualTo("0xa3960495a8298991c7f8d1cd84846574a5916b5f29780137f9ed20c744533a43");
+        assertThat(signature.get("s")).isEqualTo("0x7ec400cde04a23835d3cd09b42668378e81f5a36cf0f5c8094161d685d3c8ff0");
+        assertThat(signature.get("v")).isEqualTo(27);
     }
 
     @Test
@@ -289,18 +352,16 @@ public class HyperliquidAuthTest {
     @Test
     public void testSignL1Action_MatchesPythonSDK() throws Exception {
         // Test that Java signL1Action produces the same signature as Python SDK's sign_l1_action
-        // Python test case:
-        //   private_key = ''
-        //   wallet = Account.from_key(private_key)
+        // Python test case uses TEST_PRIVATE_KEY and:
         //   action = {'type': 'order', 'orders': [{'a': 0, 'b': True, 'p': '50000', 's': '0.001', 'r': False, 't': {'limit': {'tif': 'Gtc'}}}], 'grouping': 'na'}
         //   nonce = 1234567890000
         //   signature = sign_l1_action(wallet, action, None, nonce, None, False)
         // Expected output from Python:
-        //   r: 0x7b20b8eea8a5840d0aa30f54c8b2ab7d661ef63acbe6618ce6fe412280423b96
-        //   s: 0x61d2d2f76338f205d0a820bc59e9428427b6af1779b781e9e067abbde6bc0fd9
-        //   v: 27
+        //   r: 0x3595bd7ef659e75880681ad347e54327a925d9b7594c9bdd45f381e5e306b2b6
+        //   s: 0x113b130d337b7b7b034a98b02a2c99b0723c80d70e6ef6ecf74cfcfac386c23c
+        //   v: 28
 
-        String testPrivateKey = "";
+        String testPrivateKey = TEST_PRIVATE_KEY;
         long testNonce = 1234567890000L;
 
         SynchronizedValueFactory<Long> nonce = mock(SynchronizedValueFactory.class);
@@ -310,7 +371,7 @@ public class HyperliquidAuthTest {
             testPrivateKey, nonce, false, null,null);  // isMainnet=false, vaultAddress=null
 
         // Verify derived address matches Python
-        String expectedAddress = "";
+        String expectedAddress = EXPECTED_ETH_ADDRESS;
         assertThat(auth.getEthereumAddress()).isEqualToIgnoringCase(expectedAddress);
 
         // Create order action matching Python test
@@ -336,9 +397,9 @@ public class HyperliquidAuthTest {
         Map<String, Object> signature = auth.signL1Action(action, testNonce, null);
 
         // Verify signature matches Python SDK output
-        String expectedR = "0x7b20b8eea8a5840d0aa30f54c8b2ab7d661ef63acbe6618ce6fe412280423b96";
-        String expectedS = "0x61d2d2f76338f205d0a820bc59e9428427b6af1779b781e9e067abbde6bc0fd9";
-        int expectedV = 27;
+        String expectedR = "0x3595bd7ef659e75880681ad347e54327a925d9b7594c9bdd45f381e5e306b2b6";
+        String expectedS = "0x113b130d337b7b7b034a98b02a2c99b0723c80d70e6ef6ecf74cfcfac386c23c";
+        int expectedV = 28;
 
         assertThat(signature).containsEntry("r", expectedR);
         assertThat(signature).containsEntry("s", expectedS);
@@ -351,12 +412,12 @@ public class HyperliquidAuthTest {
         // Python test case:
         //   action = {"type":"order","orders":[{"a":1,"b":true,"p":"3800","s":"0.003","r":false,"t":{"limit":{"tif":"Gtc"}}}],"grouping":"na"}
         //   nonce = 1234567890000
-        // Expected output from Python:
-        //   r: 0xcef32a954258bce5590abe29e9c169f4c2df20cacd895530a97c6dc18a0d5ada
-        //   s: 0x6640aa362c1af237eeea5cf464360c9a1f63c1550d2dff6d0c193a6870d88b84
-        //   v: 27
+        // Expected output from Python using TEST_PRIVATE_KEY:
+        //   r: 0x9a39f60e45ccfe359f4bfd2fe2cc2a897b480572158fc2d9447ce54c9f71a65b
+        //   s: 0x411e90d85b1b629474e01364c12d767399ccfdcfb185fd687c6fbca38dc95cb6
+        //   v: 28
 
-        String testPrivateKey = "";
+        String testPrivateKey = TEST_PRIVATE_KEY;
         long testNonce = 1234567890000L;
 
         SynchronizedValueFactory<Long> nonce = mock(SynchronizedValueFactory.class);
@@ -388,9 +449,9 @@ public class HyperliquidAuthTest {
         Map<String, Object> signature = auth.signL1Action(action, testNonce, null);
 
         // Verify signature matches Python SDK output
-        String expectedR = "0xcef32a954258bce5590abe29e9c169f4c2df20cacd895530a97c6dc18a0d5ada";
-        String expectedS = "0x6640aa362c1af237eeea5cf464360c9a1f63c1550d2dff6d0c193a6870d88b84";
-        int expectedV = 27;
+        String expectedR = "0x9a39f60e45ccfe359f4bfd2fe2cc2a897b480572158fc2d9447ce54c9f71a65b";
+        String expectedS = "0x411e90d85b1b629474e01364c12d767399ccfdcfb185fd687c6fbca38dc95cb6";
+        int expectedV = 28;
 
         assertThat(signature).containsEntry("r", expectedR);
         assertThat(signature).containsEntry("s", expectedS);
