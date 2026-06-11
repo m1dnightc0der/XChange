@@ -13,6 +13,7 @@ import org.knowm.xchange.dto.meta.ExchangeMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.UserTrade;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.ExchangeUnavailableException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
 import org.knowm.xchange.okex.dto.OkexException;
@@ -76,8 +77,8 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         message.setArgs(orderList);
 
         if (!service.isPrivateStreamReady()) {
-            LOG.warn("OKX private websocket is not connected and authenticated; refusing streaming order placement");
-            throw new ExchangeException("OKX private websocket is not connected and authenticated; refusing streaming order placement");
+            LOG.warn("OKX private websocket is not connected and authenticated; refusing streaming order placement before send");
+            throw new ExchangeUnavailableException("OKX private websocket is not connected and authenticated; refusing streaming order placement before send");
         }
 
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();

@@ -98,6 +98,10 @@ isLoggedIn=false;
             LOG.debug("Ping scheduler error: {}", error.getMessage());
             completable.onError(error);
           });
+      if (xSpec.getApiKey() != null && !xSpec.getApiKey().trim().isEmpty() && !isLoggedIn) {
+        LOG.info("Deribit private websocket connected; sending login request");
+        login();
+      }
       completable.onComplete();
     } catch (Exception e) {
       completable.onError(e);
@@ -135,8 +139,24 @@ isLoggedIn=false;
 
 
 
+  public String privateStreamReadinessDetail() {
+    if (!isSocketOpen()) {
+      return "socket is not open";
+    }
+    if (xSpec.getApiKey() == null || xSpec.getApiKey().trim().isEmpty()) {
+      return "api key is not configured";
+    }
+    if (xSpec.getSecretKey() == null || xSpec.getSecretKey().trim().isEmpty()) {
+      return "secret key is not configured";
+    }
+    if (!isLoggedIn) {
+      return "login has not completed";
+    }
+    return "ready";
+  }
+
   public boolean isPrivateStreamReady() {
-    return isSocketOpen() && isLoggedIn;
+    return "ready".equals(privateStreamReadinessDetail());
   }
 
   public void login() throws JsonProcessingException, ExecutionException, Exception {
