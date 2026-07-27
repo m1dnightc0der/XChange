@@ -399,11 +399,11 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }
 
     private void scheduleReconnectWithRetry(CompletableFuture<Void> future) {
-        LOG.info("Scheduling reconnection");
+        LOG.trace("Scheduling reconnection");
 
         Instant retryLocal = this.retry;
         if (retryLocal != null) {
-            LOG.info("Waiting to reconnection before " + retryLocal);
+            LOG.trace("Waiting to reconnection before " + retryLocal);
             Instant now = Instant.now();
             while (retryLocal.isAfter(now)) {
                 try {
@@ -847,7 +847,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
             } else {
                 super.channelInactive(ctx);
                 disconnectEmitters.onNext(new Object());
-                LOG.info("Reopening Websocket Client because it was closed! {}", ctx.channel());
+                LOG.trace("Reopening Websocket Client because it was closed! {}", ctx.channel());
 
                 CompletableFuture<Void> reconnectFuture = scheduleReconnect();
 
