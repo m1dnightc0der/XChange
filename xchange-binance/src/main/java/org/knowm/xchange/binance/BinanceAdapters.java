@@ -249,6 +249,10 @@ else
     return new OpenOrders(limitOrders, otherOrders);
   }
 
+  private static boolean isPositive(BigDecimal value) {
+    return value != null && value.signum() > 0;
+  }
+
   public static synchronized Order adaptOrder(BinanceOrder order, boolean isFuture) {
     OrderType type = convert(order.side);
     Instrument instrument = adaptSymbol(order.symbol, isFuture);
@@ -267,14 +271,13 @@ else
         .id(Long.toString(order.orderId))
         .timestamp(order.getTime())
         .cumulativeAmount(order.executedQty);
-    if (!isFuture && (order.executedQty!=null && order.executedQty.signum() != 0) && (order.cummulativeQuoteQty!=null && order.cummulativeQuoteQty.signum() != 0)) {
-      builder.averagePrice(
-          order.cummulativeQuoteQty.divide(order.executedQty, MathContext.DECIMAL32));
-    } else if (isFuture && (order.avgPrice!=null && order.executedQty.signum() != 0) ) {
-      builder.averagePrice(order.avgPrice);
-
+    if (isFuture && isPositive(order.avgPrice) && isPositive(order.executedQty)) {
+      builder.averagePrice(order.avgPrice.setScale(10, RoundingMode.HALF_EVEN));
+    } else if (isPositive(order.executedQty) && isPositive(order.cummulativeQuoteQty)) {
+      builder.averagePrice(order.cummulativeQuoteQty.divide(order.executedQty, 10, RoundingMode.HALF_EVEN));
     }
     if (order.clientOrderId != null) {
+      builder.userReference(order.clientOrderId);
       builder.flag(BinanceOrderFlags.withClientId(order.clientOrderId));
     }
     return builder.build();

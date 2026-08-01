@@ -2,7 +2,6 @@ package org.knowm.xchange.binance.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -129,8 +128,11 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
               BinanceAdapters.convert(limitOrder.getType()),
               limitOrder.getOriginalAmount(),
               limitOrder.getLimitPrice());
-      LimitOrder modified = adaptBinanceOrderToLimitOrder(limitOrder.getInstrument(), raw);
-      return modified.getId();
+      Order adapted = BinanceAdapters.adaptOrder(raw, true);
+      if (!(adapted instanceof LimitOrder)) {
+        throw new ExchangeException("Expected Binance modify response to adapt to a limit order but got " + adapted.getClass().getSimpleName());
+      }
+      return adapted.getId();
     } catch (BinanceException e) {
       throw BinanceErrorAdapter.adapt(e);
     }
@@ -276,52 +278,6 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
     }
   }
 
-  static LimitOrder adaptCancelledOrderToLimitOrder(Instrument instrument, BinanceCancelledOrder raw) {
-    BigDecimal originalAmount = new BigDecimal(raw.origQty);
-    BigDecimal executedAmount = new BigDecimal(raw.executedQty);
-    BigDecimal cumulativeQuoteAmount = new BigDecimal(raw.cummulativeQuoteQty);
-    BigDecimal averagePrice =
-        executedAmount.compareTo(BigDecimal.ZERO) > 0
-            ? cumulativeQuoteAmount.divide(executedAmount, 10, RoundingMode.HALF_EVEN)
-            : new BigDecimal(raw.price);
-    return new LimitOrder.Builder(
-            "SELL".equalsIgnoreCase(raw.side) ? Order.OrderType.ASK : Order.OrderType.BID,
-            instrument)
-        .id(String.valueOf(raw.orderId))
-        .userReference(raw.clientOrderId)
-        .originalAmount(originalAmount)
-        .cumulativeAmount(executedAmount)
-        .remainingAmount(originalAmount.subtract(executedAmount))
-        .averagePrice(averagePrice)
-        .limitPrice(new BigDecimal(raw.price))
-        .orderStatus(
-            "EXPIRED".equalsIgnoreCase(raw.status)
-                ? Order.OrderStatus.EXPIRED
-                : Order.OrderStatus.CANCELED)
-        .build();
-  }
-
-  static LimitOrder adaptBinanceOrderToLimitOrder(Instrument instrument, BinanceOrder raw) {
-    BigDecimal originalAmount = raw.origQty;
-    BigDecimal executedAmount = raw.executedQty == null ? BigDecimal.ZERO : raw.executedQty;
-    BigDecimal averagePrice =
-        raw.avgPrice != null
-            ? raw.avgPrice.setScale(10, RoundingMode.HALF_EVEN)
-            : BigDecimal.ZERO.setScale(10, RoundingMode.HALF_EVEN);
-    return new LimitOrder.Builder(
-            raw.side == OrderSide.SELL ? Order.OrderType.ASK : Order.OrderType.BID,
-            instrument)
-        .id(String.valueOf(raw.orderId))
-        .userReference(raw.clientOrderId)
-        .originalAmount(originalAmount)
-        .cumulativeAmount(executedAmount)
-        .remainingAmount(originalAmount.subtract(executedAmount))
-        .averagePrice(averagePrice)
-        .limitPrice(raw.price)
-        .orderStatus(BinanceAdapters.adaptOrderStatus(raw.status))
-        .build();
-  }
-
   @Override
   public CancelOrderResult cancelOrderWithResult(CancelOrderParams orderParams) throws IOException {
     if (!(orderParams instanceof CancelOrderByInstrument)
@@ -332,11 +288,14 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
     CancelOrderByInstrument instrumentParams = (CancelOrderByInstrument) orderParams;
     CancelOrderByIdParams idParams = (CancelOrderByIdParams) orderParams;
     try {
-      BinanceCancelledOrder raw =
+      BinanceOrder raw =
           cancelOrderAllProducts(
               instrumentParams.getInstrument(), BinanceAdapters.id(idParams.getOrderId()), null, null);
-      return new CancelOrderResult(
-          true, adaptCancelledOrderToLimitOrder(instrumentParams.getInstrument(), raw));
+      Order adapted = BinanceAdapters.adaptOrder(raw, instrumentParams.getInstrument() instanceof FuturesContract);
+      if (!(adapted instanceof LimitOrder)) {
+        throw new ExchangeException("Expected Binance cancel response to adapt to a limit order but got " + adapted.getClass().getSimpleName());
+      }
+      return new CancelOrderResult(true, (LimitOrder) adapted);
     } catch (BinanceException e) {
       throw BinanceErrorAdapter.adapt(e);
     }

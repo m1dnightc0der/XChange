@@ -279,7 +279,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
    */
   @DELETE
   @Path("fapi/v1/order")
-  BinanceCancelledOrder cancelFutureOrder(
+  BinanceOrder cancelFutureOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("orderId") long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
@@ -305,7 +305,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
    */
   @DELETE
   @Path("dapi/v1/order")
-  BinanceCancelledOrder cancelInverseFutureOrder(
+  BinanceOrder cancelInverseFutureOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("orderId") long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
@@ -331,7 +331,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
    */
   @DELETE
   @Path("papi/v1/cm/order")
-  BinanceCancelledOrder cancelPortfolioMarginInverseFutureOrder(
+  BinanceOrder cancelPortfolioMarginInverseFutureOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("orderId") long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
@@ -357,7 +357,7 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
    */
   @DELETE
   @Path("papi/v1/um/order")
-  BinanceCancelledOrder cancelPortfolioMarginFutureOrder(
+  BinanceOrder cancelPortfolioMarginFutureOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("orderId") long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,

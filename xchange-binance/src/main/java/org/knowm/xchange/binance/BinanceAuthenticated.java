@@ -310,7 +310,7 @@ public interface BinanceAuthenticated extends Binance {
    */
   @DELETE
   @Path("api/v3/order")
-  BinanceCancelledOrder cancelOrder(
+  BinanceOrder cancelOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("orderId") long orderId,
       @QueryParam("origClientOrderId") String origClientOrderId,
@@ -323,7 +323,7 @@ public interface BinanceAuthenticated extends Binance {
 
   @DELETE
   @Path("papi/v1/margin/order")
-  BinanceCancelledOrder cancelPortfolioMarginOrder(
+  BinanceOrder cancelPortfolioMarginOrder(
           @QueryParam("symbol") String symbol,
           @QueryParam("orderId") long orderId,
           @QueryParam("origClientOrderId") String origClientOrderId,
@@ -353,7 +353,7 @@ public interface BinanceAuthenticated extends Binance {
    */
   @DELETE
   @Path("sapi/v1/margin/order")
-  BinanceCancelledOrder cancelMarginOrder(
+  BinanceOrder cancelMarginOrder(
       @QueryParam("symbol") String symbol,
       @QueryParam("isIsolated") Boolean isIsolated,
       @QueryParam("orderId") long orderId,

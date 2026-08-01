@@ -353,12 +353,12 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
     }
   }
 
-  public BinanceCancelledOrder cancelOrderAllProducts(Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
+  public BinanceOrder cancelOrderAllProducts(Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId)
       throws IOException, BinanceException {
     return cancelOrderAllProducts(pair,  orderId,  origClientOrderId,  newClientOrderId,false);
   }
 
-  public BinanceCancelledOrder cancelOrderAllProducts(
+  public BinanceOrder cancelOrderAllProducts(
       Instrument pair, Long orderId, String origClientOrderId, String newClientOrderId,  Boolean isMarginOrder)
       throws IOException, BinanceException {
     if(exchange.isPortfolioMarginEnabled()) {

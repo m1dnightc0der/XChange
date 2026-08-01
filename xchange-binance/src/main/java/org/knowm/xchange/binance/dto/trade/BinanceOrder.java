@@ -27,6 +27,7 @@ public final class BinanceOrder {
   public final BigDecimal icebergQty;
   public final BigDecimal avgPrice;
   public final long time;
+  public final long updateTime;
 
   public BinanceOrder(
       @JsonProperty("symbol") String symbol,
@@ -34,7 +35,9 @@ public final class BinanceOrder {
       @JsonProperty("clientOrderId") String clientOrderId,
       @JsonProperty("price") BigDecimal price,
       @JsonProperty("origQty") BigDecimal origQty,
-      @JsonProperty("executedQty") BigDecimal executedQty,
+      @JsonProperty("executedQty")
+      @JsonAlias("cumQty")
+      BigDecimal executedQty,
       @JsonProperty("cummulativeQuoteQty")
       @JsonAlias({"cumQuote", "cumBase"})
       BigDecimal cummulativeQuoteQty,
@@ -44,8 +47,9 @@ public final class BinanceOrder {
       @JsonProperty("side") OrderSide side,
       @JsonProperty("stopPrice") BigDecimal stopPrice,
       @JsonProperty("icebergQty") BigDecimal icebergQty,
-      @JsonProperty("time") long time,
-      @JsonProperty(value="avgPrice",required = false) BigDecimal avgPrice) {
+      @JsonProperty("time") Long time,
+      @JsonProperty("updateTime") Long updateTime,
+      @JsonProperty(value = "avgPrice", required = false) BigDecimal avgPrice) {
     this.symbol = symbol;
     this.orderId = orderId;
     this.clientOrderId = clientOrderId;
@@ -59,8 +63,9 @@ public final class BinanceOrder {
     this.side = side;
     this.stopPrice = stopPrice;
     this.icebergQty = icebergQty;
-    this.time = time;
-    this.avgPrice=avgPrice;
+    this.time = time == null ? 0L : time;
+    this.updateTime = updateTime == null ? this.time : updateTime;
+    this.avgPrice = avgPrice;
   }
 
   public TimeInForce getTimeInForceEnum() {
@@ -73,6 +78,7 @@ public final class BinanceOrder {
   }
 
   public Date getTime() {
-    return new Date(time);
+    long timestamp = time == 0L ? updateTime : time;
+    return new Date(timestamp);
   }
 }

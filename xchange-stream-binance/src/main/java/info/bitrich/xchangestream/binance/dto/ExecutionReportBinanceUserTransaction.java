@@ -131,6 +131,7 @@ public class ExecutionReportBinanceUserTransaction extends ProductBinanceWebSock
             stopPrice,
             BigDecimal.ZERO,
             timestamp,
+            timestamp,
             null
 
         ), isFuture);
