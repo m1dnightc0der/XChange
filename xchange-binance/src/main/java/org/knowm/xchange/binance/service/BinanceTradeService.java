@@ -2,6 +2,7 @@ package org.knowm.xchange.binance.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.Order.IOrderFlags;
 import org.knowm.xchange.dto.account.OpenPositions;
+import org.knowm.xchange.dto.trade.CancelOrderResult;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
 import org.knowm.xchange.dto.trade.OpenOrders;
@@ -82,6 +84,56 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
     }
     return placeOrderAllProducts(
         type, limitOrder, limitOrder.getLimitPrice(), null, null, null, null, tif);
+  }
+
+  @Value
+  static class OrderIdentity {
+    Long orderId;
+    String origClientOrderId;
+  }
+
+  static OrderIdentity orderIdentity(String id, String userReference) {
+    if (id != null && !id.trim().isEmpty()) {
+      try {
+        return new OrderIdentity(Long.valueOf(id), null);
+      } catch (NumberFormatException ignored) {
+        return new OrderIdentity(null, id);
+      }
+    }
+    if (userReference != null && !userReference.trim().isEmpty()) {
+      return new OrderIdentity(null, userReference);
+    }
+    throw new ExchangeException("Binance order modification requires orderId or origClientOrderId.");
+  }
+
+  @Override
+  public String changeOrder(LimitOrder limitOrder) throws IOException {
+    if (!(limitOrder.getInstrument() instanceof FuturesContract)) {
+      throw new NotAvailableFromExchangeException(
+          "Binance spot price modification is not supported by Binance futures modify endpoints.");
+    }
+    if (limitOrder.getLimitPrice() == null) {
+      throw new ExchangeException("Binance order modification requires limit price.");
+    }
+    if (limitOrder.getOriginalAmount() == null) {
+      throw new ExchangeException("Binance order modification requires quantity.");
+    }
+
+    OrderIdentity identity = orderIdentity(limitOrder.getId(), limitOrder.getUserReference());
+    try {
+      BinanceOrder raw =
+          modifyOrderAllProducts(
+              limitOrder.getInstrument(),
+              identity.getOrderId(),
+              identity.getOrigClientOrderId(),
+              BinanceAdapters.convert(limitOrder.getType()),
+              limitOrder.getOriginalAmount(),
+              limitOrder.getLimitPrice());
+      LimitOrder modified = adaptBinanceOrderToLimitOrder(limitOrder.getInstrument(), raw);
+      return modified.getId();
+    } catch (BinanceException e) {
+      throw BinanceErrorAdapter.adapt(e);
+    }
   }
 
   @Override
@@ -224,24 +276,75 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
     }
   }
 
-  @Override
-  public boolean cancelOrder(CancelOrderParams params) throws IOException {
-    try {
-      if (!(params instanceof CancelOrderByInstrument)
-          && !(params instanceof CancelOrderByIdParams)) {
-        throw new ExchangeException(
-            "You need to provide the currency pair and the order id to cancel an order.");
-      }
-      assert params instanceof CancelOrderByInstrument;
-      CancelOrderByInstrument paramInstrument = (CancelOrderByInstrument) params;
-      CancelOrderByIdParams paramId = (CancelOrderByIdParams) params;
-      cancelOrderAllProducts(
-          paramInstrument.getInstrument(), BinanceAdapters.id(paramId.getOrderId()), null, null);
+  static LimitOrder adaptCancelledOrderToLimitOrder(Instrument instrument, BinanceCancelledOrder raw) {
+    BigDecimal originalAmount = new BigDecimal(raw.origQty);
+    BigDecimal executedAmount = new BigDecimal(raw.executedQty);
+    BigDecimal cumulativeQuoteAmount = new BigDecimal(raw.cummulativeQuoteQty);
+    BigDecimal averagePrice =
+        executedAmount.compareTo(BigDecimal.ZERO) > 0
+            ? cumulativeQuoteAmount.divide(executedAmount, 10, RoundingMode.HALF_EVEN)
+            : new BigDecimal(raw.price);
+    return new LimitOrder.Builder(
+            "SELL".equalsIgnoreCase(raw.side) ? Order.OrderType.ASK : Order.OrderType.BID,
+            instrument)
+        .id(String.valueOf(raw.orderId))
+        .userReference(raw.clientOrderId)
+        .originalAmount(originalAmount)
+        .cumulativeAmount(executedAmount)
+        .remainingAmount(originalAmount.subtract(executedAmount))
+        .averagePrice(averagePrice)
+        .limitPrice(new BigDecimal(raw.price))
+        .orderStatus(
+            "EXPIRED".equalsIgnoreCase(raw.status)
+                ? Order.OrderStatus.EXPIRED
+                : Order.OrderStatus.CANCELED)
+        .build();
+  }
 
-      return true;
+  static LimitOrder adaptBinanceOrderToLimitOrder(Instrument instrument, BinanceOrder raw) {
+    BigDecimal originalAmount = raw.origQty;
+    BigDecimal executedAmount = raw.executedQty == null ? BigDecimal.ZERO : raw.executedQty;
+    BigDecimal averagePrice =
+        raw.avgPrice != null
+            ? raw.avgPrice.setScale(10, RoundingMode.HALF_EVEN)
+            : BigDecimal.ZERO.setScale(10, RoundingMode.HALF_EVEN);
+    return new LimitOrder.Builder(
+            raw.side == OrderSide.SELL ? Order.OrderType.ASK : Order.OrderType.BID,
+            instrument)
+        .id(String.valueOf(raw.orderId))
+        .userReference(raw.clientOrderId)
+        .originalAmount(originalAmount)
+        .cumulativeAmount(executedAmount)
+        .remainingAmount(originalAmount.subtract(executedAmount))
+        .averagePrice(averagePrice)
+        .limitPrice(raw.price)
+        .orderStatus(BinanceAdapters.adaptOrderStatus(raw.status))
+        .build();
+  }
+
+  @Override
+  public CancelOrderResult cancelOrderWithResult(CancelOrderParams orderParams) throws IOException {
+    if (!(orderParams instanceof CancelOrderByInstrument)
+        || !(orderParams instanceof CancelOrderByIdParams)) {
+      throw new ExchangeException(
+          "You need to provide the currency pair and the order id to cancel an order.");
+    }
+    CancelOrderByInstrument instrumentParams = (CancelOrderByInstrument) orderParams;
+    CancelOrderByIdParams idParams = (CancelOrderByIdParams) orderParams;
+    try {
+      BinanceCancelledOrder raw =
+          cancelOrderAllProducts(
+              instrumentParams.getInstrument(), BinanceAdapters.id(idParams.getOrderId()), null, null);
+      return new CancelOrderResult(
+          true, adaptCancelledOrderToLimitOrder(instrumentParams.getInstrument(), raw));
     } catch (BinanceException e) {
       throw BinanceErrorAdapter.adapt(e);
     }
+  }
+
+  @Override
+  public boolean cancelOrder(CancelOrderParams params) throws IOException {
+    return cancelOrderWithResult(params).isCancelled();
   }
 
   @Override

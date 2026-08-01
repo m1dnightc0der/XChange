@@ -19,6 +19,7 @@ import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 
 public class BinanceTradeServiceRaw extends BinanceBaseService {
@@ -376,6 +377,41 @@ public class BinanceTradeServiceRaw extends BinanceBaseService {
           binance.cancelOrder(BinanceAdapters.toSymbol(pair), orderId, origClientOrderId, newClientOrderId, getRecvWindow(), getTimestampFactory(),
               super.apiKey, super.signatureCreator)).withRetry(retry("cancelOrder")).withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER)).call();
     }
+  }
+
+  public BinanceOrder modifyOrderAllProducts(
+      Instrument pair,
+      Long orderId,
+      String origClientOrderId,
+      OrderSide side,
+      BigDecimal quantity,
+      BigDecimal price)
+      throws IOException, BinanceException {
+    if (!(pair instanceof FuturesContract)) {
+      throw new NotAvailableFromExchangeException(
+          "Binance spot price modification is not supported by the futures modify endpoints.");
+    }
+
+    return decorateApiCall(
+            () -> {
+              String symbol =
+                  BinanceAdapters.isInverse(pair)
+                      ? BinanceAdapters.toInverseSymbol(pair)
+                      : BinanceAdapters.toSymbol(pair);
+              if (exchange.isPortfolioMarginEnabled()) {
+                return BinanceAdapters.isInverse(pair)
+                    ? binanceFutures.modifyPortfolioMarginInverseOrder(symbol, orderId, origClientOrderId, side, quantity, price, getRecvWindow(), getTimestampFactory(), super.apiKey, super.signatureCreator)
+                    : binanceFutures.modifyPortfolioMarginLinearOrder(symbol, orderId, origClientOrderId, side, quantity, price, getRecvWindow(), getTimestampFactory(), super.apiKey, super.signatureCreator);
+              }
+              return BinanceAdapters.isInverse(pair)
+                  ? inverseBinanceFutures.modifyInverseFutureOrder(symbol, orderId, origClientOrderId, side, quantity, price, getRecvWindow(), getTimestampFactory(), super.apiKey, super.signatureCreator)
+                  : binanceFutures.modifyFutureOrder(symbol, orderId, origClientOrderId, side, quantity, price, getRecvWindow(), getTimestampFactory(), super.apiKey, super.signatureCreator);
+            })
+        .withRetry(retry("modifyOrder"))
+        .withRateLimiter(rateLimiter(ORDERS_PER_SECOND_RATE_LIMITER))
+        .withRateLimiter(rateLimiter(ORDERS_PER_DAY_RATE_LIMITER))
+        .withRateLimiter(rateLimiter(REQUEST_WEIGHT_RATE_LIMITER))
+        .call();
   }
 
   public List<BinanceCancelledOrder> cancelAllOpenOrdersAllProducts(Instrument pair)

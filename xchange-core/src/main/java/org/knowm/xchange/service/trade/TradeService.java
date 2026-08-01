@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Collection;
 import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.account.OpenPositions;
+import org.knowm.xchange.dto.trade.CancelOrderResult;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.MarketOrder;
 import org.knowm.xchange.dto.trade.OpenOrders;
@@ -232,6 +233,14 @@ public interface TradeService extends BaseService {
    */
   default boolean cancelOrder(CancelOrderParams orderParams) throws IOException {
     throw new NotYetImplementedForExchangeException("cancelOrder");
+  }
+
+  default CancelOrderResult cancelOrderWithResult(String orderId) throws IOException {
+    return new CancelOrderResult(cancelOrder(orderId), null);
+  }
+
+  default CancelOrderResult cancelOrderWithResult(CancelOrderParams orderParams) throws IOException {
+    return new CancelOrderResult(cancelOrder(orderParams), null);
   }
 
   default Collection<String> cancelAllOrders(CancelAllOrders orderParams) throws IOException {

@@ -203,6 +203,66 @@ public interface BinanceFuturesAuthenticated extends BinanceFutures {
       @QueryParam(SIGNATURE) ParamsDigest signature)
       throws IOException, BinanceException;
 
+  @PUT
+  @Path("fapi/v1/order")
+  BinanceOrder modifyFutureOrder(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("orderId") Long orderId,
+      @QueryParam("origClientOrderId") String origClientOrderId,
+      @QueryParam("side") OrderSide side,
+      @QueryParam("quantity") BigDecimal quantity,
+      @QueryParam("price") BigDecimal price,
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
+  @PUT
+  @Path("dapi/v1/order")
+  BinanceOrder modifyInverseFutureOrder(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("orderId") Long orderId,
+      @QueryParam("origClientOrderId") String origClientOrderId,
+      @QueryParam("side") OrderSide side,
+      @QueryParam("quantity") BigDecimal quantity,
+      @QueryParam("price") BigDecimal price,
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
+  @PUT
+  @Path("papi/v1/um/order")
+  BinanceOrder modifyPortfolioMarginLinearOrder(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("orderId") Long orderId,
+      @QueryParam("origClientOrderId") String origClientOrderId,
+      @QueryParam("side") OrderSide side,
+      @QueryParam("quantity") BigDecimal quantity,
+      @QueryParam("price") BigDecimal price,
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
+  @PUT
+  @Path("papi/v1/cm/order")
+  BinanceOrder modifyPortfolioMarginInverseOrder(
+      @QueryParam("symbol") String symbol,
+      @QueryParam("orderId") Long orderId,
+      @QueryParam("origClientOrderId") String origClientOrderId,
+      @QueryParam("side") OrderSide side,
+      @QueryParam("quantity") BigDecimal quantity,
+      @QueryParam("price") BigDecimal price,
+      @QueryParam("recvWindow") Long recvWindow,
+      @QueryParam("timestamp") SynchronizedValueFactory<Long> timestamp,
+      @HeaderParam(X_MBX_APIKEY) String apiKey,
+      @QueryParam(SIGNATURE) ParamsDigest signature)
+      throws IOException, BinanceException;
+
   /**
    * Cancel an active futures order.
    *
