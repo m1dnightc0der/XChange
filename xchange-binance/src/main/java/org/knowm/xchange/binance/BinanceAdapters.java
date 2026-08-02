@@ -269,7 +269,7 @@ else
         .orderStatus(adaptOrderStatus(order.status))
         .originalAmount(order.origQty)
         .id(Long.toString(order.orderId))
-        .timestamp(order.getTime())
+        .timestamp(order.getUpdateTime())
         .cumulativeAmount(order.executedQty);
     if (isFuture && isPositive(order.avgPrice) && isPositive(order.executedQty)) {
       builder.averagePrice(order.avgPrice.setScale(10, RoundingMode.HALF_EVEN));

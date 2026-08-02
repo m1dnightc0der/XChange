@@ -221,26 +221,138 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
   public String changeOrder(LimitOrder limitOrder) throws IOException, FundsExceededException {
 
     OkexResponse<List<OkexOrderResponse>> okexResponse = amendOkexOrder(adaptAmendOrder(limitOrder, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null)));
-    if(!okexResponse.isSuccess()){
-      throw new OkexException(
-              okexResponse.getMsg(),
-              Integer.parseInt(okexResponse.getCode()));
-    }
+    return validateAmendOrderResponse(okexResponse, limitOrder.getId());
+  }
 
-
-    return okexResponse
-        .getData()
+  private String validateAmendOrderResponse(
+      OkexResponse<List<OkexOrderResponse>> okexResponse, String expectedOrderId) {
+    return validateAmendOrderResponses(okexResponse, java.util.Collections.singletonList(expectedOrderId))
         .get(0)
         .getOrderId();
   }
 
+  private List<OkexOrderResponse> validateAmendOrderResponses(
+      OkexResponse<List<OkexOrderResponse>> okexResponse, List<String> expectedOrderIds) {
+    validateAmendResponseEnvelope(okexResponse);
+    List<OkexOrderResponse> data = okexResponse.getData();
+    if (data == null || data.isEmpty()) {
+      throw new OkexException(
+          "OKX amend order response missing data", parseOkexCode(okexResponse.getCode()));
+    }
+    for (int index = 0; index < data.size(); index++) {
+      String expectedOrderId =
+          expectedOrderIds != null && index < expectedOrderIds.size() ? expectedOrderIds.get(index) : null;
+      OkexOrderResponse result = data.get(index);
+      validateAmendOrderResult(result, expectedOrderId);
+      String orderId = result.getOrderId();
+      if (orderId == null || orderId.isEmpty()) {
+        throw new OkexException(
+            "OKX amend order response missing ordId", parseOkexCode(result.getCode()));
+      }
+    }
+    return data;
+  }
+
+  private void validateAmendResponseEnvelope(OkexResponse<List<OkexOrderResponse>> okexResponse) {
+    if (okexResponse == null) {
+      throw new OkexException("OKX amend order response missing", 0);
+    }
+    if (!okexResponse.isSuccess()) {
+      OkexOrderResponse firstFailure = firstAmendFailureRow(okexResponse.getData());
+      int exceptionCode = firstFailure != null && firstFailure.getCode() != null
+          ? parseOkexCode(firstFailure.getCode())
+          : parseOkexCode(okexResponse.getCode());
+      throw new OkexException(buildAmendFailureMessage(okexResponse), exceptionCode);
+    }
+  }
+
+  private OkexOrderResponse firstAmendFailureRow(List<OkexOrderResponse> data) {
+    if (data == null) {
+      return null;
+    }
+    for (OkexOrderResponse row : data) {
+      if (row != null && row.getCode() != null && !"0".equals(row.getCode())) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  private String buildAmendFailureMessage(OkexResponse<List<OkexOrderResponse>> okexResponse) {
+    StringBuilder message = new StringBuilder("OKX amend order failed");
+
+    List<OkexOrderResponse> data = okexResponse.getData();
+    if (data != null && !data.isEmpty()) {
+      for (int index = 0; index < data.size(); index++) {
+        OkexOrderResponse row = data.get(index);
+        if (row == null) {
+          message.append(" row[").append(index).append("]=null");
+          continue;
+        }
+        message
+            .append(" row[").append(index).append("]")
+            .append(" ordId=").append(row.getOrderId())
+            .append(" sCode=").append(row.getCode())
+            .append(" sMsg=").append(row.getMessage());
+      }
+      return message.toString();
+    }
+
+    message.append(" code=").append(okexResponse.getCode());
+    message.append(" msg=").append(okexResponse.getMsg());
+    return message.toString();
+  }
+
+  private void validateAmendOrderResult(OkexOrderResponse result, String expectedOrderId) {
+    if (result == null) {
+      throw new OkexException("OKX amend order response missing result", 0);
+    }
+    String resultCode = result.getCode();
+    String resultMessage = result.getMessage();
+    String orderId = result.getOrderId();
+    if (!"0".equals(resultCode)) {
+      throw new OkexException(
+          "OKX amend order failed sCode="
+              + resultCode
+              + " sMsg="
+              + resultMessage
+              + " ordId="
+              + orderId,
+          parseOkexCode(resultCode));
+    }
+    if (expectedOrderId != null
+        && !expectedOrderId.isEmpty()
+        && orderId != null
+        && !orderId.isEmpty()
+        && !expectedOrderId.equals(orderId)) {
+      throw new OkexException(
+          "OKX amend order returned unexpected ordId="
+              + orderId
+              + " expectedOrdId="
+              + expectedOrderId,
+          parseOkexCode(resultCode));
+    }
+  }
+
+  private int parseOkexCode(String code) {
+    if (code == null || code.isEmpty()) {
+      return 0;
+    }
+    try {
+      return Integer.parseInt(code);
+    } catch (NumberFormatException e) {
+      return 0;
+    }
+  }
+
   public List<String> changeOrder(List<LimitOrder> limitOrders)
       throws IOException, FundsExceededException {
-    return amendOkexOrder(
+    OkexResponse<List<OkexOrderResponse>> okexResponse = amendOkexOrder(
             limitOrders.stream()
                 .map(order -> OkexAdapters.adaptAmendOrder(order, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null)))
-                .collect(Collectors.toList()))
-        .getData()
+                .collect(Collectors.toList()));
+    return validateAmendOrderResponses(
+            okexResponse, limitOrders.stream().map(LimitOrder::getId).collect(Collectors.toList()))
         .stream()
         .map(OkexOrderResponse::getOrderId)
         .collect(Collectors.toList());

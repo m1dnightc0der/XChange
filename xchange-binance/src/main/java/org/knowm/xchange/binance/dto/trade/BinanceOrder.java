@@ -81,4 +81,9 @@ public final class BinanceOrder {
     long timestamp = time == 0L ? updateTime : time;
     return new Date(timestamp);
   }
+
+  public Date getUpdateTime() {
+    long timestamp = updateTime == 0L ? time : updateTime;
+    return new Date(timestamp);
+  }
 }

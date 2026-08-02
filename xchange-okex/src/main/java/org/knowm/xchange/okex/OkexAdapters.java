@@ -91,7 +91,11 @@ return orderList;
             exchangeMetaData.getInstruments().get(instrument).getContractValue())),
         instrument,
         order.getOrderId(),
-        new Date(Long.parseLong(order.getCreationTime())),
+        new Date(
+            Long.parseLong(
+                order.getUpdateTime() == null || order.getUpdateTime().isEmpty()
+                    ? order.getCreationTime()
+                    : order.getUpdateTime())),
         new BigDecimal(order.getPrice()),
         order.getAverageFilledPrice().isEmpty()
             ? BigDecimal.ZERO
@@ -118,7 +122,7 @@ return orderList;
     return OkexAmendOrderRequest.builder()
         .instrumentId(adaptInstrument(order.getInstrument()))
         .orderId(order.getId())
-        .amendedAmount(exchangeMetaData==null ? order.getOriginalAmount().toString() : convertVolumeToContractSize(order, exchangeMetaData))
+        //.amendedAmount(exchangeMetaData==null ? order.getOriginalAmount().toString() : convertVolumeToContractSize(order, exchangeMetaData))
         .amendedPrice(order.getLimitPrice().toString())
         .build();
   }

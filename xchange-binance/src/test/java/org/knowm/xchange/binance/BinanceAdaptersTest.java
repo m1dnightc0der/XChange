@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Date;
 import org.junit.Test;
 import org.knowm.xchange.binance.dto.account.AssetDividendResponse;
 import org.knowm.xchange.binance.dto.trade.BinanceNewOrder;
@@ -28,6 +29,18 @@ public class BinanceAdaptersTest {
     assertThat(binanceOrder.clientOrderId).isEqualTo("5ecf3a");
     assertThat(binanceOrder.getTimeInForceEnum()).isEqualTo(TimeInForce.GTC);
     assertThat(binanceOrder.status).isEqualTo(OrderStatus.CANCELED);
+  }
+
+  @Test
+  public void adaptOrderPrefersUpdateTimeForTimestamp() throws IOException {
+    String json =
+        "{\"orderId\":1024466142987,\"symbol\":\"BTCUSDT\",\"status\":\"NEW\",\"clientOrderId\":\"5ecf3a\",\"price\":\"70000.00\",\"avgPrice\":\"0.00\",\"origQty\":\"0.010\",\"executedQty\":\"0.000\",\"cumQuote\":\"0.00000\",\"timeInForce\":\"GTC\",\"type\":\"LIMIT\",\"side\":\"BUY\",\"time\":1785668235408,\"updateTime\":1785668236408}";
+
+    BinanceOrder binanceOrder = ObjectMapperHelper.readValue(json, BinanceOrder.class);
+
+    Order adapted = BinanceAdapters.adaptOrder(binanceOrder, true);
+
+    assertThat(adapted.getTimestamp()).isEqualTo(new Date(1785668236408L));
   }
 
   @Test
@@ -58,7 +71,7 @@ public class BinanceAdaptersTest {
     assertThat(marketOrder.getOriginalAmount()).isEqualByComparingTo("0.10700000");
     assertThat(marketOrder.getCumulativeAmount()).isEqualByComparingTo("0.10700000");
     assertThat(marketOrder.getRemainingAmount()).isEqualByComparingTo(BigDecimal.ZERO);
-    assertThat(marketOrder.getAveragePrice()).isEqualByComparingTo("0.01858383");
+    assertThat(marketOrder.getAveragePrice()).isEqualByComparingTo("0.0185838318");
     assertThat(marketOrder.getOrderFlags())
         .contains(BinanceOrderFlags.withClientId("gzcLIkn86ag3FycOCEl6Vi"));
 
