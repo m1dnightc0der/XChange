@@ -103,4 +103,7 @@ public class OkexOrderDetails {
 
   @JsonProperty("cTime")
   private String creationTime;
+
+  @JsonProperty("amendResult")
+  private String amendResult;
 }

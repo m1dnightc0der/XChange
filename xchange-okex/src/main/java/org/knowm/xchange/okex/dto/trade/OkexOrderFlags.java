@@ -9,5 +9,6 @@ public enum OkexOrderFlags implements Order.IOrderFlags {
     CROSS_MARGIN,
     OPTIMAL_LIMIT_IOC,
     IOC,
-    FOK
+    FOK,
+    AMEND_REJECTED
 }

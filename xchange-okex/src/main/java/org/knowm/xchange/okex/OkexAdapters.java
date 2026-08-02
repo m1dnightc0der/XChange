@@ -83,7 +83,7 @@ return orderList;
   }
     public static LimitOrder adaptOrder(OkexOrderDetails order, ExchangeMetaData exchangeMetaData) {
     Instrument instrument = adaptOkexInstrumentId(order.getInstrumentId());
-    return new LimitOrder(
+    LimitOrder limitOrder = new LimitOrder(
         "buy".equals(order.getSide()) ? Order.OrderType.BID : Order.OrderType.ASK,
         (( exchangeMetaData==null || exchangeMetaData.getInstruments() ==null)?  new BigDecimal(order.getAmount()) : convertContractSizeToVolume(
             order.getAmount(),
@@ -106,6 +106,10 @@ return orderList;
             ? Order.OrderStatus.OPEN
             : Order.OrderStatus.valueOf(order.getState().toUpperCase(Locale.ENGLISH)),
         order.getClientOrderId());
+    if ("-1".equals(order.getAmendResult())) {
+      limitOrder.addOrderFlag(OkexOrderFlags.AMEND_REJECTED);
+    }
+    return limitOrder;
   }
 
   public static OpenOrders adaptOpenOrders(
