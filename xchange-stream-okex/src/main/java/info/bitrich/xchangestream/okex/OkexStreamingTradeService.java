@@ -82,14 +82,22 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         }
 
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();
-        if (response.get("data") != null && response.get("data").get(0) != null && response.get("data").get(0).get("sCode") != null && !response.get("data").get(0).get("sCode").equals("0")) {
-            throw new OkexException(
-                    response.get("data").get(0).get("sMsg").textValue(),
-                    Integer.parseInt(response.get("data").get(0).get("sCode").textValue()));
-
+        JsonNode orderResponse = response.get("data") == null ? null : response.get("data").get(0);
+        if (orderResponse == null) {
+            throw new ExchangeException("OKX order response did not include data: " + response);
         }
-        String orderId = response.get("data").get(0).get("ordId").textValue();
-        return orderId;
+        JsonNode sCodeNode = orderResponse.get("sCode");
+        String sCode = sCodeNode == null ? null : sCodeNode.asText();
+        if (sCode != null && !"0".equals(sCode)) {
+            JsonNode sMsgNode = orderResponse.get("sMsg");
+            String sMsg = sMsgNode == null ? "OKX order placement failed" : sMsgNode.asText();
+            throw new OkexException(sMsg, Integer.parseInt(sCode));
+        }
+        JsonNode ordIdNode = orderResponse.get("ordId");
+        if (ordIdNode == null || ordIdNode.asText().isEmpty()) {
+            throw new ExchangeException("OKX successful order response did not include ordId: " + response);
+        }
+        return ordIdNode.asText();
     }
 
     @Override

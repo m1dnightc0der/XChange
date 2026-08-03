@@ -436,7 +436,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                             connect()
                                     .subscribe(
                                             () -> {
-                                                LOG.info("Reconnection complete");
+                                                LOG.debug("Reconnection complete");
                                                 retry = Instant.now().plus(retryDuration);
                                                 future.complete(null);
                                             },
@@ -501,7 +501,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                                     .shutdownGracefully(2, idleTimeoutSeconds, TimeUnit.SECONDS)
                                                     .addListener(
                                                             f -> {
-                                                                LOG.info("Disconnected");
+                                                                LOG.debug("Disconnected");
                                                                 connectionStateModel.setState(State.CLOSED);
                                                                 disconnectEmitters.onNext(new Object());
                                                                 completable.onComplete();
@@ -557,12 +557,12 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
             LOG.debug("Non ping message: {}", message);
         }
         if (!isSocketOpen()) {
-            LOG.warn("WebSocket is not open! Call connect first. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
+            LOG.debug("WebSocket is not open! Call connect first. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
 
         if (!webSocketChannel.isWritable()) {
-            LOG.warn("Cannot send data to WebSocket as it is not writable. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
+            LOG.debug("Cannot send data to WebSocket as it is not writable. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
         if (message != null) {
@@ -624,8 +624,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }*/
 
     public @NonNull Observable<T> subscribeSingle(Long id, String message) {
-        LOG.debug("subscribeSingle : called from {}", Thread.currentThread().getStackTrace()[2]);
-        LOG.info("subscribeSingle to id={}, message={}", id, message);
+        LOG.debug("subscribeSingle to id={}, message={}", id, message);
 
 
         return Observable.<T>create(
@@ -652,8 +651,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
 
     public Observable<T> subscribeChannel(String channelName, Object... args) {
         final String subscriptionUniqueId = getSubscriptionUniqueId(channelName, args);
-        LOG.debug("subscribeChannel : called from {}", Thread.currentThread().getStackTrace()[2]);
-        LOG.info("Subscribing to subscriptionUniqueId={}, args={}", subscriptionUniqueId, args);
+         LOG.info("Subscribing to subscriptionUniqueId={}, args={}", subscriptionUniqueId, args);
 
 
         return Observable.<T>create(
@@ -685,9 +683,9 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                 try {
                                     sendMessage(getUnsubscribeMessage(subscriptionUniqueId, args));
                                 } catch (IOException e) {
-                                    LOG.debug("Failed to unsubscribe channel: {} {}", subscriptionUniqueId, e.toString());
+                                    LOG.error("Failed to unsubscribe channel: {} {}", subscriptionUniqueId, e.toString());
                                 } catch (Exception e) {
-                                    LOG.warn("Failed to unsubscribe channel: {}", subscriptionUniqueId, e);
+                                    LOG.error("Failed to unsubscribe channel: {}", subscriptionUniqueId, e);
                                 }
                             }
                         })
@@ -695,8 +693,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }
 
     public void resubscribeChannels() throws IOException {
-        LOG.debug("resubscribeChannels: called from {}", Thread.currentThread().getStackTrace()[2]);
-        for (Entry<String, Subscription> entry : channels.entrySet()) {
+         for (Entry<String, Subscription> entry : channels.entrySet()) {
             try {
                 Subscription subscription = entry.getValue();
                 //These need to be rate limited.
@@ -714,8 +711,6 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }
 
     public void resubscribeChannel(String channelName) throws IOException {
-        LOG.debug("resubscribeChannel: called from {}", Thread.currentThread().getStackTrace()[2]);
-
         try {
             Subscription subscription = channels.get(channelName);
             sendMessage(getSubscribeMessage(subscription.channelName, subscription.args));
