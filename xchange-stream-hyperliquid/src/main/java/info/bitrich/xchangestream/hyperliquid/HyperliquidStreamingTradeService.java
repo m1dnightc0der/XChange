@@ -23,6 +23,7 @@ import si.mazi.rescu.SynchronizedValueFactory;
 import org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory;
 
 import java.util.Arrays;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -284,8 +285,11 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
                             mapper.treeToValue(orderNode.get("order"),
                                     org.knowm.xchange.hyperliquid.dto.trade.Order.class);
 
-                    // Convert to XChange Order
-                    Order order = HyperliquidAdapters.adaptOrder(hyperliquidOrder);
+                    // Convert to XChange Order using the status update timestamp when present.
+                    Date statusTimestamp = orderNode.hasNonNull("statusTimestamp")
+                            ? new Date(orderNode.get("statusTimestamp").asLong())
+                            : null;
+                    Order order = HyperliquidAdapters.adaptOrder(hyperliquidOrder, statusTimestamp);
                     if (orderNode.has("status")) {
                         Order.OrderStatus status = HyperliquidAdapters.adaptOrderStatus(orderNode.get("status").asText());
                         order.setOrderStatus(status);

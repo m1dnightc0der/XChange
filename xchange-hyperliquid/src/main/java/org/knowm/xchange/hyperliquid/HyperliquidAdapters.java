@@ -152,6 +152,12 @@ public class HyperliquidAdapters {
 
 
     public static Order adaptOrder(org.knowm.xchange.hyperliquid.dto.trade.Order order) {
+        return adaptOrder(order, new Date(order.getTimestamp()));
+    }
+
+    public static Order adaptOrder(
+            org.knowm.xchange.hyperliquid.dto.trade.Order order,
+            Date eventTimestamp) {
         Order.OrderType type = adapt(order.getSide());
         Instrument instrument = adaptInstrument(order.getCoin());
         Order.Builder builder;
@@ -161,7 +167,7 @@ public class HyperliquidAdapters {
 
                 .id(order.getOid())
                 .userReference(Cloid.toMinimalHexString(order.getCloid()))
-                .timestamp(new Date(order.getTimestamp()))
+                .timestamp(eventTimestamp == null ? new Date(order.getTimestamp()) : eventTimestamp)
                 .averagePrice(order.getPrice())
                 .originalAmount(order.getOrigSz())
                 .cumulativeAmount(order.getOrigSz().subtract(order.getSz()));

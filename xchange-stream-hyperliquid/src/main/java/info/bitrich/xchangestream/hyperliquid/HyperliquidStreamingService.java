@@ -17,7 +17,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class HyperliquidStreamingService extends JsonNettyStreamingService {
 
@@ -37,6 +39,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
 
     private WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler = null;
     private final ExchangeSpecification exchangeSpecification;
+    private final AtomicLong connectGeneration = new AtomicLong();
 
     public HyperliquidStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
         super(apiUrl);
@@ -50,7 +53,8 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
 
     @Override public Completable connect() {
 
-        LOG.debug("connect : called from {}", Thread.currentThread().getStackTrace()[2]);
+        long generation = connectGeneration.incrementAndGet();
+        LOG.debug("connect generation={} called from {}", generation, Thread.currentThread().getStackTrace()[2]);
         isLoggedIn=false;
         pingPongDisconnectIfConnected();
         Completable conn = super.connect();
@@ -111,7 +115,14 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
         }
 
 
-        if (jsonNode != null && jsonNode.has("channel") && !jsonNode.get("channel").asText().equals("post") && !jsonNode.get("channel").asText().equals("pong")) {
+        if (isSubscriptionAcknowledgement(jsonNode)) {
+            JsonNode subscription = jsonNode.get("data").get("subscription");
+            String channel = subscription.path("type").asText();
+            String user = subscription.path("user").asText().toLowerCase(Locale.ROOT);
+            LOG.info("privateStream event=subscription-ack exchange=HYPERLIQUID channel={} user={} connectGeneration={}",
+                    channel, user, connectGeneration.get());
+            handleMessage(jsonNode);
+        } else if (jsonNode != null && jsonNode.has("channel") && !jsonNode.get("channel").asText().equals("post") && !jsonNode.get("channel").asText().equals("pong")) {
             handleMessage(jsonNode);
         } else if (jsonNode != null && jsonNode.has("channel") && jsonNode.get("channel").asText().equals("post") && jsonNode.has("data") && jsonNode.get("data").has("id")) {
             // Handle subscription responses
@@ -128,6 +139,13 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
         }
     }
 
+    private boolean isSubscriptionAcknowledgement(JsonNode message) {
+        return message != null
+                && "subscriptionResponse".equals(message.path("channel").asText())
+                && message.path("data").path("subscription").has("type")
+                && message.path("data").path("subscription").has("user");
+    }
+
     @Override
     protected String getChannelNameFromMessage(JsonNode message) {
 
@@ -139,7 +157,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
                 channelName = message.get("data").get("subscription").get("type").asText() + "." + message.get("data").get("subscription").get("coin").asText();
             } else if (message.get("data").get("subscription").has("type") && message.get("data").get("subscription").has("user")) {
                 // Handle user-specific channels (userFills, userEvents)
-                channelName = message.get("data").get("subscription").get("type").asText() + "." + message.get("data").get("subscription").get("user").asText();
+                channelName = message.get("data").get("subscription").get("type").asText() + "." + message.get("data").get("subscription").get("user").asText().toLowerCase(Locale.ROOT);
             }
         } else {
             if (message.has("channel") && message.has("data") && message.get("data").has("coin")) {
@@ -151,8 +169,9 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
                 channelName = message.get("channel").asText() + "." + message.get("data").get("user").asText().toLowerCase();
             } else if (message.has("channel") && (message.get("channel").asText().equals("userEvents") || message.get("channel").asText().equals("userFills") || message.get("channel").asText().equals("orderUpdates"))) {
                 if(exchangeSpecification!=null && exchangeSpecification.getExchangeSpecificParameters().get("wallet")!=null) {
-                    channelName = message.get("channel").asText() + "." + ((exchangeSpecification.getExchangeSpecificParameters().get("vault")!=null ? exchangeSpecification.getExchangeSpecificParameters().get("vault") : exchangeSpecification.getExchangeSpecificParameters().get("wallet"))
-).toString().toLowerCase();
+                    channelName = message.get("channel").asText() + "."
+                            + exchangeSpecification.getExchangeSpecificParameters().get("wallet")
+                            .toString().toLowerCase(Locale.ROOT);
                 } else{
                     channelName = message.get("channel").asText();
                 }
@@ -208,7 +227,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
         // For user-specific channels (userFills, userEvents), use "user" parameter
         // For market data channels (trades, l2Book, etc.), use "coin" parameter
         HyperliquidSubscribeMessage.Subscription subscription;
-        if ("userFills".equals(type) || "userEvents".equals(type)) {
+        if ("userFills".equals(type) || "userEvents".equals(type) || "orderUpdates".equals(type)) {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier, true);
         } else {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier);
