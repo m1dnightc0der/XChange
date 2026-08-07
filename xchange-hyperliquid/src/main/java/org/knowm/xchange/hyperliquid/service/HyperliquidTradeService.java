@@ -11,6 +11,7 @@ import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
+import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
 import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
 import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
@@ -110,7 +111,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (orderId != null) {
                     return orderId.toString();
                 } else if (status.hasError()) {
-                    throw new ExchangeException("Order placement failed: " + status.getError());
+                    throw exchangeFailure("Order placement failed: ", status.getError());
                 } else {
                     throw new IOException("Order placement failed: no order ID returned");
                 }
@@ -118,7 +119,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 throw new IOException("Order placement failed: invalid response structure");
             }
         } else if (rawResponse != null && rawResponse.isError()) {
-            throw new ExchangeException("Order placement failed: " + rawResponse.getErrorMessage());
+            throw exchangeFailure("Order placement failed: ", rawResponse.getErrorMessage());
         } else {
             throw new IOException("Failed to place limit order - no response received");
         }
@@ -183,7 +184,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 if (newOrderId != null) {
                     return newOrderId.toString();
                 } else if (status.hasError()) {
-                    throw new ExchangeException("Order modification failed: " + status.getError());
+                    throw exchangeFailure("Order modification failed: ", status.getError());
                 } else {
                     throw new IOException("Order modification failed: no order ID returned");
                 }
@@ -193,10 +194,16 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
                 throw new IOException("Order modification failed: invalid response structure");
             }
         } else if (rawResponse != null && rawResponse.isError()) {
-            throw new ExchangeException("Order modification failed: " + rawResponse.getErrorMessage());
+            throw exchangeFailure("Order modification failed: ", rawResponse.getErrorMessage());
         } else {
             throw new IOException("Failed to modify order - no response received");
         }
+    }
+
+    private ExchangeException exchangeFailure(String prefix, String message) {
+        org.knowm.xchange.exceptions.NonceException nonceFailure =
+                HyperliquidExceptionAdapter.nonceException(message);
+        return nonceFailure != null ? nonceFailure : new ExchangeException(prefix + message);
     }
 
     @Override
@@ -215,7 +222,16 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
             response = super.cancelByCloid(symbol, orderId);
         }
         if (response != null && response.getStatus().equals("err")) {
-            throw new IOException((response.getResult() != null ? response.getResult().toString() : "Failed to cancel order ID " + orderId));
+            String message =
+                    response.getResult() != null
+                            ? response.getResult().toString()
+                            : "Failed to cancel order ID " + orderId;
+            org.knowm.xchange.exceptions.NonceException nonceFailure =
+                    HyperliquidExceptionAdapter.nonceException(message);
+            if (nonceFailure != null) {
+                throw nonceFailure;
+            }
+            throw new IOException(message);
         }
         // Result can be a Map (success) or String (error message)
         // For success, the structure is: {"type": "cancel", "data": {"statuses": ["success"]}}

@@ -42,14 +42,12 @@ public class HyperliquidStreamingExchange extends HyperliquidExchange implements
 
     // Initialize trade service with authentication if private key is available
     if (exchangeSpecification.getSecretKey() != null && !exchangeSpecification.getSecretKey().isEmpty()) {
-      // Create nonce factory for signing
-      si.mazi.rescu.SynchronizedValueFactory<Long> nonceFactory =
-          new org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory();
+      si.mazi.rescu.SynchronizedValueFactory<Long> signedActionNonceFactory = getNonceFactory();
 
       org.knowm.xchange.hyperliquid.service.HyperliquidAuth hyperliquidAuth =
           org.knowm.xchange.hyperliquid.service.HyperliquidAuth.createHyperliquidAuth(
               exchangeSpecification.getSecretKey(),
-              nonceFactory,
+              signedActionNonceFactory,
               !useSandbox(), // isMainnet
               (String) exchangeSpecification.getExchangeSpecificParametersItem("vault"), (String) exchangeSpecification.getExchangeSpecificParametersItem("wallet")
           );

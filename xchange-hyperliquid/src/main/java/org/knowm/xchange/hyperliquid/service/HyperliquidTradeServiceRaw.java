@@ -2,6 +2,7 @@ package org.knowm.xchange.hyperliquid.service;
 
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
+import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
 import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
@@ -154,41 +155,9 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         action.put("type", "cancelByCloid");
         action.put("cancels", java.util.Arrays.asList(cancelWire));
 
-        // Generate nonce (timestamp in milliseconds)
-        long nonce = System.currentTimeMillis();
-        Long expiresAfter = null; // Can be set if needed
-
-        // Generate signature for the action
-        // Matches Python SDK's sign_l1_action call
-        // Returns Map with {"r": "0x...", "s": "0x...", "v": int}
-        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
-
-        // Create main request body matching Python's _post_action structure:
-        // { "action": action, "nonce": nonce, "signature": {"r": "0x...", "s": "0x...", "v": int}, "vaultAddress": vault, "expiresAfter": expires }
-        Map<String, Object> requestBody = new LinkedHashMap<>();
-        requestBody.put("action", action);
-        requestBody.put("nonce", nonce);
-        requestBody.put("signature", signature);
-
-        // Add vault address if configured (matching Python: None for certain action types like "usdClassTransfer", "sendAsset")
-
-
-
-        if (hyperliquidAuth != null && hyperliquidAuth.getVaultAddress() != null) {
-            requestBody.put("vaultAddress", hyperliquidAuth.getVaultAddress());
-        } else {
-            requestBody.put("vaultAddress", null);
-        }
-
-        // Add expiresAfter
-        requestBody.put("expiresAfter", expiresAfter);
-
-
-
-        return hyperliquidAuthenticated.cancelOrder(
-                "application/json",
-                requestBody
-        );
+        Map<String, Object> requestBody =
+                hyperliquidAuth.createSignedActionRequest(action, null);
+        return sendCancel(requestBody);
     }
     public HyperliquidResponse cancel(String name, String orderId) throws IOException {
         // Create cancel wire in Hyperliquid format with short field names
@@ -202,41 +171,9 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         action.put("type", "cancel");
         action.put("cancels", java.util.Arrays.asList(cancelWire));
 
-        // Generate nonce (timestamp in milliseconds)
-        long nonce = System.currentTimeMillis();
-        Long expiresAfter = null; // Can be set if needed
-
-        // Generate signature for the action
-        // Matches Python SDK's sign_l1_action call
-        // Returns Map with {"r": "0x...", "s": "0x...", "v": int}
-        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
-
-        // Create main request body matching Python's _post_action structure:
-        // { "action": action, "nonce": nonce, "signature": {"r": "0x...", "s": "0x...", "v": int}, "vaultAddress": vault, "expiresAfter": expires }
-        Map<String, Object> requestBody = new LinkedHashMap<>();
-        requestBody.put("action", action);
-        requestBody.put("nonce", nonce);
-        requestBody.put("signature", signature);
-
-        // Add vault address if configured (matching Python: None for certain action types like "usdClassTransfer", "sendAsset")
-
-
-
-        if (hyperliquidAuth != null && hyperliquidAuth.getVaultAddress() != null) {
-            requestBody.put("vaultAddress", hyperliquidAuth.getVaultAddress());
-        } else {
-            requestBody.put("vaultAddress", null);
-        }
-
-        // Add expiresAfter
-        requestBody.put("expiresAfter", expiresAfter);
-
-
-
-        return hyperliquidAuthenticated.cancelOrder(
-                "application/json",
-                requestBody
-        );
+        Map<String, Object> requestBody =
+                hyperliquidAuth.createSignedActionRequest(action, null);
+        return sendCancel(requestBody);
     }
     /**
      * Get user account state
@@ -314,27 +251,9 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
                 builder
         );
 
-        // Generate nonce (timestamp in milliseconds)
-        long nonce = System.currentTimeMillis();
-        Long expiresAfter = null; // Can be set if needed
-
-        // Generate signature for the action
-        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
-
-        // Create signed request body
-        String vaultAddress = (hyperliquidAuth != null) ? hyperliquidAuth.getVaultAddress() : null;
-        Map<String, Object> requestBody = org.knowm.xchange.hyperliquid.HyperliquidAdapters.createSignedRequestBody(
-                action,
-                nonce,
-                signature,
-                vaultAddress,
-                expiresAfter
-        );
-
-        Object rawResponse = hyperliquidAuthenticated.placeOrder(
-                "application/json",
-                requestBody
-        );
+        Map<String, Object> requestBody =
+                hyperliquidAuth.createSignedActionRequest(action, null);
+        Object rawResponse = sendOrder(requestBody);
 
         // Convert raw response to typed PlaceOrderResponse
         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -405,28 +324,9 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         action.put("order", orderWire);
         //action.put(java.util.Arrays.asList(modifyWire));
 
-        // Generate nonce (timestamp in milliseconds)
-        long nonce = System.currentTimeMillis();
-        Long expiresAfter = null;
-
-        // Generate signature for the action
-        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
-
-        // Create signed request body
-        String vaultAddress = (hyperliquidAuth != null) ? hyperliquidAuth.getVaultAddress() : null;
-        Map<String, Object> requestBody = org.knowm.xchange.hyperliquid.HyperliquidAdapters.createSignedRequestBody(
-                action,
-                nonce,
-                signature,
-                vaultAddress,
-                expiresAfter
-        );
-
-        // Send request to exchange
-        Object rawResponse = hyperliquidAuthenticated.placeOrder(
-                "application/json",
-                requestBody
-        );
+        Map<String, Object> requestBody =
+                hyperliquidAuth.createSignedActionRequest(action, null);
+        Object rawResponse = sendOrder(requestBody);
 
         // Convert raw response to typed PlaceOrderResponse
         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -464,6 +364,34 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
                 reduceOnly,
                 null
         );
+    }
+
+    private HyperliquidResponse sendCancel(Map<String, Object> requestBody) throws IOException {
+        return sendMutation(
+                () -> hyperliquidAuthenticated.cancelOrder("application/json", requestBody));
+    }
+
+    private Object sendOrder(Map<String, Object> requestBody) throws IOException {
+        return sendMutation(
+                () -> hyperliquidAuthenticated.placeOrder("application/json", requestBody));
+    }
+
+    @FunctionalInterface
+    interface MutationRequest<T> {
+        T send() throws IOException;
+    }
+
+    static <T> T sendMutation(MutationRequest<T> request) throws IOException {
+        try {
+            return request.send();
+        } catch (IOException | RuntimeException failure) {
+            org.knowm.xchange.exceptions.NonceException nonceFailure =
+                    HyperliquidExceptionAdapter.nonceException(failure);
+            if (nonceFailure != null) {
+                throw nonceFailure;
+            }
+            throw failure;
+        }
     }
 
     /**

@@ -13,6 +13,7 @@ import org.knowm.xchange.dto.trade.UserTrade;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.hyperliquid.HyperliquidAuthenticated;
+import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
 import org.knowm.xchange.hyperliquid.dto.trade.TimeInForce;
 import org.knowm.xchange.hyperliquid.service.HyperliquidAuth;
@@ -44,7 +45,7 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
     private final HyperliquidAuth hyperliquidAuth;
     private final int responseTimeout = 5000; // 5 second timeout for order placement
     private final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
-    private final SynchronizedValueFactory<Long> nonceFactory =
+    private final SynchronizedValueFactory<Long> requestIdFactory =
             new AtomicLongIncrementalTime2014NonceFactory();
 
     // Shared metadata loader for coin name to asset index mapping
@@ -116,24 +117,10 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
                 null // no builder
         );
 
-        // Generate nonce (timestamp in milliseconds)
-        long nonce = System.currentTimeMillis();
-        Long expiresAfter = null;
+        Map<String, Object> payload = hyperliquidAuth.createSignedActionRequest(action, null);
 
-        // Generate signature for the action
-        Map<String, Object> signature = hyperliquidAuth.signL1Action(action, nonce, expiresAfter);
-
-        // Create request payload using adapter
-        Map<String, Object> payload = HyperliquidAdapters.createSignedRequestBody(
-                action,
-                nonce,
-                signature,
-                hyperliquidAuth.getVaultAddress(),
-                expiresAfter
-        );
-
-        // Create WebSocket POST message
-        Long id = nonceFactory.createValue();
+        // WebSocket correlation IDs are independent from signed-action nonces.
+        Long id = requestIdFactory.createValue();
         HyperliquidPostMessage.Request request =
                 new HyperliquidPostMessage.Request("action", payload);
         HyperliquidPostMessage message =
@@ -148,6 +135,14 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
                 mapper.writeValueAsString(message))
             .timeout(responseTimeout, MILLISECONDS)
             .blockingSingle();
+
+        // Action errors use the nested WebSocket post-response envelope.
+        JsonNode responsePayload = response.path("data").path("response").path("payload");
+        if ("err".equals(responsePayload.path("status").asText()) && responsePayload.has("response")) {
+            String error = responsePayload.get("response").asText();
+            limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
+            throw orderPlacementFailure(error);
+        }
 
         // Parse response
         if (response.has("data") && response.get("data").has("response") && response.get("data").get("response").has("payload") && response.get("data").get("response").get("payload").has("response") && response.get("data").get("response").get("payload").get("response").has("data")) {
@@ -182,7 +177,7 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
                 if (status.has("error")) {
                     String error = status.get("error").asText();
                     limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-                    throw new ExchangeException("Order placement failed: " + error);
+                    throw orderPlacementFailure(error);
                 }
             }
         }
@@ -191,13 +186,21 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
         if (response.has("response") && response.get("response").has("error")) {
             String error = response.get("response").get("error").asText();
             limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-            throw new ExchangeException("Order placement failed: " + error);
+            throw orderPlacementFailure(error);
         }
 
         // Unexpected response format
         LOG.error("Unexpected response format: {}", response.toString());
         limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
         throw new ExchangeException("Unexpected response format from exchange");
+    }
+
+    private ExchangeException orderPlacementFailure(String error) {
+        org.knowm.xchange.exceptions.NonceException nonceFailure =
+                HyperliquidExceptionAdapter.nonceException(error);
+        return nonceFailure != null
+                ? nonceFailure
+                : new ExchangeException("Order placement failed: " + error);
     }
 
     /**

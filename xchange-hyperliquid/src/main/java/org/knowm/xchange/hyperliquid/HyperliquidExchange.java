@@ -6,6 +6,7 @@ import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.hyperliquid.service.HyperliquidAccountService;
 import org.knowm.xchange.hyperliquid.service.HyperliquidMarketDataService;
 import org.knowm.xchange.hyperliquid.service.HyperliquidTradeService;
+import si.mazi.rescu.SynchronizedValueFactory;
 
 public class HyperliquidExchange extends BaseExchange implements Exchange {
 
@@ -35,6 +36,19 @@ public class HyperliquidExchange extends BaseExchange implements Exchange {
         exchangeSpecification.setHost("api.hyperliquid-testnet.xyz");
       }
     }
+  }
+
+  @Override
+  public SynchronizedValueFactory<Long> getNonceFactory() {
+    ExchangeSpecification specification = getExchangeSpecification();
+    if (specification == null) {
+      return super.getNonceFactory();
+    }
+    String secretKey = specification.getSecretKey();
+    if (secretKey == null || secretKey.trim().isEmpty()) {
+      return super.getNonceFactory();
+    }
+    return HyperliquidNonceFactoryRegistry.forSecretKey(secretKey);
   }
 
   @Override

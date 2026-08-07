@@ -10,6 +10,7 @@ import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.crypto.params.ECDomainParameters;
 import org.bouncycastle.util.encoders.Hex;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.service.BaseParamsDigest;
 import org.msgpack.jackson.dataformat.MessagePackFactory;
 import si.mazi.rescu.RestInvocation;
@@ -45,7 +46,7 @@ import java.util.*;
  * </ul>
  *
  * <h2>Supported Operations</h2>
- * <p>All methods using {@link #signL1Action(Map, long, Long)} automatically support vault addresses:</p>
+ * <p>All methods using {@link #createSignedActionRequest(Map, Long)} automatically support vault addresses:</p>
  * <ul>
  *   <li>Place orders - {@code placeOrderRaw()} (REST), {@code placeLimitOrder()} (WebSocket)</li>
  *   <li>Modify orders - {@code modifyOrderRaw()} (REST)</li>
@@ -72,8 +73,9 @@ import java.util.*;
  * </pre>
  *
  * <h2>Thread Safety</h2>
- * <p>This class is thread-safe. Multiple threads can safely call {@link #signL1Action}
- * concurrently. Each invocation generates a unique nonce using the provided nonce factory.</p>
+ * <p>This class is thread-safe. Multiple threads can safely call {@link
+ * #createSignedActionRequest(Map, Long)} concurrently. Each invocation generates a unique nonce
+ * using the provided nonce factory.</p>
  *
  * @see org.knowm.xchange.hyperliquid.HyperliquidAdapters#createSignedRequestBody
  * @see org.knowm.xchange.hyperliquid.service.HyperliquidTradeServiceRaw
@@ -266,6 +268,14 @@ public class HyperliquidAuth extends BaseParamsDigest {
      *   data = l1_payload(phantom_agent)
      *   return sign_inner(wallet, data)
      */
+    public Map<String, Object> createSignedActionRequest(
+            Map<String, Object> action, Long expiresAfter) {
+        long nonceValue = nonce.createValue();
+        Map<String, Object> signature = signL1Action(action, nonceValue, expiresAfter);
+        return HyperliquidAdapters.createSignedRequestBody(
+                action, nonceValue, signature, vaultAddress, expiresAfter);
+    }
+
     public Map<String, Object> signL1Action(Map<String, Object> action, long nonce, Long expiresAfter) {
         try {
             // Step 1: action_hash(action, active_pool, nonce, expires_after)
