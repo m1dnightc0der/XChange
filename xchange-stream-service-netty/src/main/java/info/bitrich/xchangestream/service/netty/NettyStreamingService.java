@@ -551,18 +551,23 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
      */
     public abstract void messageHandler(String message);
 
+    protected String sanitizeMessageForLogging(String message) {
+        return message;
+    }
+
     public synchronized ChannelFuture sendMessage(String message) {
-        LOG.debug("Sending message: {} called from {}", message, Thread.currentThread().getStackTrace()[2]);
-        if (!message.contains("ping")) {
-            LOG.debug("Non ping message: {}", message);
+        String loggedMessage = sanitizeMessageForLogging(message);
+        LOG.debug("Sending message: {} called from {}", loggedMessage, Thread.currentThread().getStackTrace()[2]);
+        if (message != null && !message.contains("ping")) {
+            LOG.debug("Non ping message: {}", loggedMessage);
         }
         if (!isSocketOpen()) {
-            LOG.debug("WebSocket is not open! Call connect first. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
+            LOG.debug("WebSocket is not open! Call connect first. Unable to send message "+loggedMessage+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
 
         if (!webSocketChannel.isWritable()) {
-            LOG.debug("Cannot send data to WebSocket as it is not writable. Unable to send message "+message+" called from:"+Thread.currentThread().getStackTrace()[2]);
+            LOG.debug("Cannot send data to WebSocket as it is not writable. Unable to send message "+loggedMessage+" called from:"+Thread.currentThread().getStackTrace()[2]);
             return null;
         }
         if (message != null) {

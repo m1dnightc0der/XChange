@@ -79,22 +79,25 @@ public class DeribitStreamingTradeService implements StreamingTradeService {
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(responseTimeout, MILLISECONDS).blockingSingle();
 
       //esponse.get("data").get(0).get("ordId").textValue();
-    if(response.has("result") && response.get("result").has("order")) {
-       order_id = response.get("result").get("order").get("order_id").textValue();
+    if (response.has("result")
+        && response.get("result").has("order")
+        && response.get("result").get("order").hasNonNull("order_id")) {
+      order_id = response.get("result").get("order").get("order_id").textValue();
       return order_id;
-    } else if (response.has("error")){
+    } else if (response.has("error") && response.get("error").isObject()) {
       DeribitError deribitError = new DeribitError();
-      if(response.get("error").get("code")!=null) {
+      if (response.get("error").has("code")) {
         deribitError.setCode(response.get("error").get("code").asInt());
       }
-      if(response.get("error").get("message")!=null) {
+      if (response.get("error").hasNonNull("message")) {
         deribitError.setMessage(response.get("error").get("message").textValue());
       }
-
-      throw  new DeribitException(deribitError);
-    } else {
-      return order_id;
+      if (response.get("error").has("data")) {
+        deribitError.setData(response.get("error").get("data"));
+      }
+      throw DeribitAdapters.adapt(new DeribitException(deribitError));
     }
+    throw new ExchangeException("malformed Deribit order placement response: " + response);
 
 
 

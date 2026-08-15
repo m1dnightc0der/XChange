@@ -70,9 +70,9 @@ public class DeribitMarketDataService extends DeribitMarketDataServiceRaw
     String deribitInstrumentName = DeribitAdapters.adaptInstrumentName(instrument);
     DeribitOrderBook deribitOrderBook;
     try {
-      deribitOrderBook = super.getDeribitOrderBook(deribitInstrumentName, null);
+      deribitOrderBook = getDeribitOrderBook(deribitInstrumentName, null);
     } catch (DeribitException ex) {
-      throw new ExchangeException(ex);
+      throw DeribitAdapters.adapt(ex);
     }
 
     return DeribitAdapters.adaptOrderBook(deribitOrderBook);
@@ -114,9 +114,9 @@ public class DeribitMarketDataService extends DeribitMarketDataServiceRaw
 
     try {
       deribitTrades =
-          super.getLastTradesByInstrument(deribitInstrumentName, null, null, null, null, null);
+          getLastTradesByInstrument(deribitInstrumentName, null, null, null, null, null);
     } catch (DeribitException ex) {
-      throw new ExchangeException(ex);
+      throw DeribitAdapters.adapt(ex);
     }
 
     return DeribitAdapters.adaptTrades(deribitTrades, instrument);

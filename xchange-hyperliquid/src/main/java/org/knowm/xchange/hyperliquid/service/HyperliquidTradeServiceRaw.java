@@ -2,7 +2,7 @@ package org.knowm.xchange.hyperliquid.service;
 
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
-import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
+import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
@@ -386,7 +386,7 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
             return request.send();
         } catch (IOException | RuntimeException failure) {
             org.knowm.xchange.exceptions.NonceException nonceFailure =
-                    HyperliquidExceptionAdapter.nonceException(failure);
+                    HyperliquidAdapters.adaptNonceFailure(failure);
             if (nonceFailure != null) {
                 throw nonceFailure;
             }

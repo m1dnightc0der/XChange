@@ -11,6 +11,7 @@ import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
 import org.knowm.xchange.deribit.v2.DeribitExchange;
+import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.deribit.v2.dto.Kind;
 import org.knowm.xchange.deribit.v2.dto.trade.AdvancedOptions;
 import org.knowm.xchange.deribit.v2.dto.trade.OrderFlags;
@@ -115,45 +116,50 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
     AdvancedOptions advanced = findOrderFlagValue(order, AdvancedOptions.class);
     Boolean mmp = hasOrderFlag(order, OrderFlags.MMP);
 
-    OrderPlacement placement;
-    if (order.getType() == Order.OrderType.BID || order.getType() == Order.OrderType.EXIT_ASK) {
-      placement =
-          super.buy(
-              instrumentName,
-              amount,
-              type,
-              label,
-              price,
-              timeInForce,
-              maxShow,
-              postOnly,
-              rejectPostOnly,
-              reduceOnly,
-              triggerPrice,
-              trigger,
-              advanced,
-              mmp);
-    } else if (order.getType() == Order.OrderType.ASK  || order.getType() == Order.OrderType.EXIT_BID) {
-      placement =
-          super.sell(
-              instrumentName,
-              amount,
-              type,
-              label,
-              price,
-              timeInForce,
-              maxShow,
-              postOnly,
-              rejectPostOnly,
-              reduceOnly,
-              triggerPrice,
-              trigger,
-              advanced,
-              mmp);
-    } else {
-      throw new ExchangeException("Unsupported order type: " + order.getType());
+    try {
+      OrderPlacement placement;
+      if (order.getType() == Order.OrderType.BID || order.getType() == Order.OrderType.EXIT_ASK) {
+        placement =
+            buy(
+                instrumentName,
+                amount,
+                type,
+                label,
+                price,
+                timeInForce,
+                maxShow,
+                postOnly,
+                rejectPostOnly,
+                reduceOnly,
+                triggerPrice,
+                trigger,
+                advanced,
+                mmp);
+      } else if (order.getType() == Order.OrderType.ASK
+          || order.getType() == Order.OrderType.EXIT_BID) {
+        placement =
+            sell(
+                instrumentName,
+                amount,
+                type,
+                label,
+                price,
+                timeInForce,
+                maxShow,
+                postOnly,
+                rejectPostOnly,
+                reduceOnly,
+                triggerPrice,
+                trigger,
+                advanced,
+                mmp);
+      } else {
+        throw new ExchangeException("Unsupported order type: " + order.getType());
+      }
+      return placement.getOrder().getOrderId();
+    } catch (DeribitException ex) {
+      throw DeribitAdapters.adapt(ex);
     }
-    return placement.getOrder().getOrderId();
   }
 
   public static Boolean hasOrderFlag(Order order, OrderFlags flag) {
@@ -196,7 +202,11 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
 
   @Override
   public boolean cancelOrder(String orderId) throws IOException {
-    return super.cancel(orderId).getOrderState() == OrderState.cancelled;
+    try {
+      return cancel(orderId).getOrderState() == OrderState.cancelled;
+    } catch (DeribitException ex) {
+      throw DeribitAdapters.adapt(ex);
+    }
   }
 
   @Override
@@ -321,23 +331,26 @@ public class DeribitTradeService extends DeribitTradeServiceRaw implements Trade
       currencies = ((DeribitAccountService) exchange.getAccountService()).currencies().stream().toArray(Currency[]::new);
     }
     ArrayList<Order> orders = new ArrayList<Order>();
-    for (int i = 0; i < orderIds.length; i++) {
-      orders.add(DeribitAdapters.adaptOrder(getOrderState(orderIds[i])));
-    }
-
-    for (int i = 0; i < orderLabels.length; i++) {
-      List<org.knowm.xchange.deribit.v2.dto.trade.Order> ordersByLabel;
-      for (Currency c : currencies) {
-        ordersByLabel =getOrderState(orderLabels[i],c.getSymbol());
-        if(ordersByLabel!=null){
-          for(org.knowm.xchange.deribit.v2.dto.trade.Order orderByLabel :ordersByLabel) {
-            orders.add(DeribitAdapters.adaptOrder(orderByLabel));
-          }
-          break;
-        }
+    try {
+      for (String orderId : orderIds) {
+        orders.add(DeribitAdapters.adaptOrder(getOrderState(orderId)));
       }
 
+      for (String orderLabel : orderLabels) {
+        List<org.knowm.xchange.deribit.v2.dto.trade.Order> ordersByLabel;
+        for (Currency c : currencies) {
+          ordersByLabel = getOrderState(orderLabel, c.getSymbol());
+          if (ordersByLabel != null) {
+            for (org.knowm.xchange.deribit.v2.dto.trade.Order orderByLabel : ordersByLabel) {
+              orders.add(DeribitAdapters.adaptOrder(orderByLabel));
+            }
+            break;
+          }
+        }
+      }
+      return orders;
+    } catch (DeribitException ex) {
+      throw DeribitAdapters.adapt(ex);
     }
-    return orders;
   }
 }

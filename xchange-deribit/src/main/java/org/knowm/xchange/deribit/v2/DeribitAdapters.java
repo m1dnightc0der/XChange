@@ -2,7 +2,6 @@ package org.knowm.xchange.deribit.v2;
 
 import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.currency.CurrencyPair;
-import org.knowm.xchange.deribit.v2.dto.DeribitError;
 import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.deribit.v2.dto.Direction;
 import org.knowm.xchange.deribit.v2.dto.account.AccountSummary;
@@ -21,9 +20,7 @@ import org.knowm.xchange.dto.meta.CurrencyMetaData;
 import org.knowm.xchange.dto.meta.FeeTier;
 import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.trade.*;
-import org.knowm.xchange.exceptions.CurrencyPairNotValidException;
 import org.knowm.xchange.exceptions.ExchangeException;
-import org.knowm.xchange.exceptions.RateLimitExceededException;
 import org.knowm.xchange.instrument.Instrument;
 
 import java.math.BigDecimal;
@@ -34,7 +31,6 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.apache.commons.lang3.StringUtils.isNotEmpty;
 
 public class DeribitAdapters {
     private static final String IMPLIED_COUNTER = "USD";
@@ -275,51 +271,9 @@ public class DeribitAdapters {
         }
     }
 
-    /**
-     * Parse errors from HTTP exceptions
-     */
+    /** Parse native errors from REST and WebSocket responses. */
     public static ExchangeException adapt(DeribitException ex) {
-
-        DeribitError error = ex.getError();
-
-        if (error != null
-                && error.getClass().equals(DeribitError.class)
-                && isNotEmpty(error.getMessage())) {
-
-            int code = error.getCode();
-            String msg = code + ": " + error.getMessage();
-            Object rawData = error.getData();
-            String data = rawData == null ? null : rawData.toString();
-            if (isNotEmpty(data)) {
-                msg += " - " + data;
-            }
-
-            if (isDeribitRateLimitError(code, error.getMessage(), ex.getMessage())) {
-                return new RateLimitExceededException(msg, ex);
-            }
-
-            switch (code) {
-                case -32602:
-                    return new CurrencyPairNotValidException(data, ex);
-                default:
-                    return new ExchangeException(msg, ex);
-            }
-        }
-        return new ExchangeException("Operation failed without any error message", ex);
-    }
-
-    private static boolean isDeribitRateLimitError(int code, String errorMessage, String exceptionMessage) {
-        if (code == 10028 || code == 100028) {
-            return true;
-        }
-        if (errorMessage != null) {
-            String normalizedErrorMessage = errorMessage.toLowerCase(Locale.ROOT);
-            if ("too_many_requests".equalsIgnoreCase(errorMessage)
-                    || normalizedErrorMessage.contains("http status code: 429")) {
-                return true;
-            }
-        }
-        return exceptionMessage != null && exceptionMessage.toLowerCase(Locale.ROOT).contains("http status code: 429");
+        return DeribitErrorAdapter.adapt(ex);
     }
 
     public static Balance adapt(AccountSummary as) {

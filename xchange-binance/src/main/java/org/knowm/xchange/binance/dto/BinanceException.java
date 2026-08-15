@@ -9,16 +9,22 @@ import si.mazi.rescu.HttpStatusExceptionSupport;
 public class BinanceException extends HttpStatusExceptionSupport implements HttpResponseAware {
 
   private final int code;
+  private final String rawMessage;
 
   private Map<String, List<String>> headers;
 
   public BinanceException(@JsonProperty("code") int code, @JsonProperty("msg") String msg) {
     super(msg);
     this.code = code;
+    this.rawMessage = msg;
   }
 
   public int getCode() {
     return code;
+  }
+
+  public String getRawMessage() {
+    return rawMessage;
   }
 
   @Override

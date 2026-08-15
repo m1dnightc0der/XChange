@@ -19,6 +19,8 @@ import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidCandleSnapshot;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidL2Book;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidTrade;
 import org.knowm.xchange.hyperliquid.dto.trade.Side;
+import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.NonceException;
 import org.knowm.xchange.instrument.Instrument;
 
 import java.math.BigDecimal;
@@ -29,6 +31,17 @@ import java.util.stream.Collectors;
  * Utility class to adapt between Hyperliquid DTOs and XChange DTOs
  */
 public class HyperliquidAdapters {
+
+    /** Shared public error entry point for Hyperliquid REST and WebSocket mutations. */
+    public static ExchangeException adaptError(String context, String error) {
+        String normalizedContext = context == null ? "" : context;
+        String normalizedError = error == null ? "Unknown Hyperliquid error" : error;
+        return HyperliquidExceptionAdapter.adapt(normalizedContext, normalizedError);
+    }
+
+    public static NonceException adaptNonceFailure(Throwable failure) {
+        return HyperliquidExceptionAdapter.nonceException(failure);
+    }
 
     /**
      * Adapt instrument to coin symbol for Hyperliquid API

@@ -118,25 +118,26 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
       String orderId = orderQueryParams.getOrderId();
 
       OkexResponse<List<OkexOrderDetails>> okexResponse = getOkexOrder(adaptInstrument(instrument), orderId);
-      if(!okexResponse.isSuccess()){
-        throw new OkexException(
-                okexResponse.getMsg(),
-                Integer.parseInt(okexResponse.getCode()));
+      if (!okexResponse.isSuccess()) {
+        throw OkexAdapters.adaptError(okexResponse.getCode(), okexResponse.getMsg());
       }
-      List<OkexOrderDetails> orderResults =
-              okexResponse.getData();
+      List<OkexOrderDetails> orderResults = okexResponse.getData();
 
-      if (!orderResults.isEmpty()) {
+      if (orderResults != null && !orderResults.isEmpty()) {
         result = OkexAdapters.adaptOrder(orderResults.get(0), Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null);
       }
     } else if (orderQueryParams instanceof ClientOrderIdQueryParamInstrument){
       Instrument instrument = ((ClientOrderIdQueryParamInstrument) orderQueryParams).getInstrument();
       String orderId = orderQueryParams.getOrderId();
 
-      List<OkexOrderDetails> orderResults =
-              getOkexClientOrder(OkexAdapters.adaptInstrument(instrument), orderId).getData();
+      OkexResponse<List<OkexOrderDetails>> okexResponse =
+          getOkexClientOrder(OkexAdapters.adaptInstrument(instrument), orderId);
+      if (!okexResponse.isSuccess()) {
+        throw OkexAdapters.adaptError(okexResponse.getCode(), okexResponse.getMsg());
+      }
+      List<OkexOrderDetails> orderResults = okexResponse.getData();
 
-      if (!orderResults.isEmpty()) {
+      if (orderResults != null && !orderResults.isEmpty()) {
         result = OkexAdapters.adaptOrder(orderResults.get(0), Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null);
       }
     }
@@ -166,12 +167,7 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
         placeOkexOrder(
             OkexAdapters.adaptOrder(
                 marketOrder, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null), exchange.accountLevel));
-
-    if (okexResponse.isSuccess()) return okexResponse.getData().get(0).getOrderId();
-    else
-      throw new OkexException(
-          okexResponse.getData().get(0).getMessage(),
-          Integer.parseInt(okexResponse.getData().get(0).getCode()));
+    return successfulOrderIdOrThrow(okexResponse, false, "market order");
   }
 
   @Override
@@ -180,26 +176,34 @@ public class OkexTradeService extends OkexTradeServiceRaw implements TradeServic
         placeOkexOrder(
             OkexAdapters.adaptOrder(
                 limitOrder,(Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null), exchange.accountLevel));
-
-    if (okexResponse.isSuccess()) return okexResponse.getData().get(0).getOrderId();
-    else
-      throw new OkexException(
-          okexResponse.getData().get(0).getMessage(),
-          Integer.parseInt(okexResponse.getData().get(0).getCode()));
+    return successfulOrderIdOrThrow(okexResponse, false, "limit order");
   }
 
   @Override public String placeStopOrder(StopOrder order) throws IOException {
-    // Time-in-force should not be provided for market orders but is required for
-    // limit orders, order we only default it for limit orders. If the caller
-    // specifies one for a market order, we don't remove it, since Binance might
-    // allow
-    // it at some point.
     OkexResponse<List<OkexOrderResponse>> okexResponse = placeOkexAlgoOrder(OkexAdapters.adaptOrder(order, (Boolean.TRUE.equals(exchange.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchange.getExchangeMetaData() : null)));
+    return successfulOrderIdOrThrow(okexResponse, true, "stop order");
+  }
 
-    if (okexResponse.isSuccess())
-      return okexResponse.getData().get(0).getAlgoOrderId();
-    else
-      throw new OkexException(okexResponse.getData().get(0).getMessage(), Integer.parseInt(okexResponse.getData().get(0).getCode()));
+  private String successfulOrderIdOrThrow(
+      OkexResponse<List<OkexOrderResponse>> response, boolean algoOrder, String context) {
+    if (response == null) {
+      throw OkexAdapters.adaptError("unknown", "OKX " + context + " response missing");
+    }
+    List<OkexOrderResponse> data = response.getData();
+    OkexOrderResponse first = data == null || data.isEmpty() ? null : data.get(0);
+    if (!response.isSuccess()) {
+      String rawCode = first != null && first.getCode() != null ? first.getCode() : response.getCode();
+      String message = first != null && first.getMessage() != null ? first.getMessage() : response.getMsg();
+      throw OkexAdapters.adaptError(rawCode, message);
+    }
+    if (first == null) {
+      throw OkexAdapters.adaptError("0", "OKX successful " + context + " response missing data");
+    }
+    String orderId = algoOrder ? first.getAlgoOrderId() : first.getOrderId();
+    if (orderId == null || orderId.isEmpty()) {
+      throw OkexAdapters.adaptError("0", "OKX successful " + context + " response missing order ID");
+    }
+    return orderId;
   }
 
   public List<String> placeLimitOrder(List<LimitOrder> limitOrders)

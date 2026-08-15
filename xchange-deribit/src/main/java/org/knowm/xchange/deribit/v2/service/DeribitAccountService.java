@@ -8,6 +8,7 @@ import java.util.List;
 import org.knowm.xchange.currency.Currency;
 import org.knowm.xchange.deribit.v2.DeribitAdapters;
 import org.knowm.xchange.deribit.v2.DeribitExchange;
+import org.knowm.xchange.deribit.v2.dto.DeribitException;
 import org.knowm.xchange.dto.account.AccountInfo;
 import org.knowm.xchange.dto.account.Balance;
 import org.knowm.xchange.dto.account.OpenPosition;
@@ -22,8 +23,12 @@ public class DeribitAccountService extends DeribitAccountServiceRaw implements A
 
   @Override
   public AccountInfo getAccountInfo() throws IOException {
-    Wallet wallet = Wallet.Builder.from(balances()).build();
-    return new AccountInfo(null, null, Collections.singleton(wallet), openPositions(), null);
+    try {
+      Wallet wallet = Wallet.Builder.from(balances()).build();
+      return new AccountInfo(null, null, Collections.singleton(wallet), openPositions(), null);
+    } catch (DeribitException ex) {
+      throw DeribitAdapters.adapt(ex);
+    }
   }
 
   List<Balance> balances() throws IOException {

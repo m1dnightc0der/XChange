@@ -512,7 +512,8 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
       try {
         return marketDataService.getBinanceOrderbookAllProducts(instrument, oderBookFetchLimitParameter);
       } catch (BinanceException e) {
-        if (BinanceErrorAdapter.adapt(e) instanceof RateLimitExceededException) {
+        ExchangeException adapted = BinanceErrorAdapter.adapt(e);
+        if (adapted instanceof RateLimitExceededException) {
           if (fallenBack.compareAndSet(false, true)) {
             LOG.error(
                 "API Rate limit was hit when fetching Binance order book snapshot. Provide a \n"
@@ -530,7 +531,7 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
             Thread.sleep(15000);
           }
         }
-        throw e;
+        throw adapted;
       }
     }
   }
@@ -963,7 +964,8 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
       return marketDataService.getBinanceOrderbookAllProducts(
           instrument, oderBookFetchLimitParameter);
     } catch (BinanceException e) {
-      if (BinanceErrorAdapter.adapt(e) instanceof RateLimitExceededException) {
+      ExchangeException adapted = BinanceErrorAdapter.adapt(e);
+      if (adapted instanceof RateLimitExceededException) {
         if (fallenBack.compareAndSet(false, true)) {
           LOG.error(
               "API Rate limit was hit when fetching Binance order book snapshot. Provide a \n"
@@ -981,7 +983,7 @@ public class BinanceStreamingMarketDataService implements StreamingMarketDataSer
           Thread.sleep(15000);
         }
       }
-      throw e;
+      throw adapted;
     }
   }
 }

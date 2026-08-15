@@ -192,6 +192,17 @@ public class DeribitAdaptersTest {
   }
 
   @Test
+  public void legacyMessageSensitiveRateLimitMappingRemainsUnchangedForUnfamiliarCode() {
+    DeribitError error = new DeribitError();
+    error.setCode(99999);
+    error.setMessage("too_many_requests");
+
+    ExchangeException adapted = DeribitAdapters.adapt(new DeribitException(error));
+
+    assertThat(adapted).isExactlyInstanceOf(RateLimitExceededException.class);
+  }
+
+  @Test
   public void adaptDeribitHttp429MessageReturnsRateLimitExceededException() {
     DeribitError error = new DeribitError();
     error.setCode(0);

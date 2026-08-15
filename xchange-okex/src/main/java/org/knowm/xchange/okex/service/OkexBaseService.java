@@ -3,10 +3,9 @@ package org.knowm.xchange.okex.service;
 import org.knowm.xchange.client.ExchangeRestProxyBuilder;
 import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.exceptions.ExchangeException;
-import org.knowm.xchange.exceptions.InternalServerException;
-import org.knowm.xchange.exceptions.RateLimitExceededException;
 import org.knowm.xchange.okex.Okex;
 import org.knowm.xchange.okex.OkexAuthenticated;
+import org.knowm.xchange.okex.OkexErrorAdapter;
 import org.knowm.xchange.okex.OkexExchange;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.service.BaseResilientExchangeService;
@@ -44,12 +43,6 @@ public class OkexBaseService extends BaseResilientExchangeService<OkexExchange>
 
   /** <a href="https://www.okex.com/docs-v5/en/#error-code">...</a> * */
   protected ExchangeException handleError(OkexException exception) {
-    if (exception.getMessage().contains("Requests too frequent")) {
-      return new RateLimitExceededException(exception);
-    } else if (exception.getMessage().contains("System error")) {
-      return new InternalServerException(exception);
-    } else {
-      return new ExchangeException(exception);
-    }
+    return OkexErrorAdapter.adapt(exception);
   }
 }

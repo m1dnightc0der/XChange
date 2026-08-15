@@ -17,6 +17,7 @@ import org.knowm.xchange.dto.meta.ExchangeMetaData;
 import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.meta.WalletHealth;
 import org.knowm.xchange.dto.trade.*;
+import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexInstType;
@@ -29,6 +30,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /** Author: Max Gao (gaamox@tutanota.com) Created: 08-06-2021 */
@@ -41,6 +44,64 @@ public class OkexAdapters {
   private static final String TRADING_WALLET_ID = "trading";
   private static final String FOUNDING_WALLET_ID = "founding";
   private static final String FUTURES_WALLET_ID = "futures";
+  private static final Pattern CANONICAL_ERROR =
+      Pattern.compile("^OKX error\\s+([0-9]+(?:_[0-9]+)?):\\s*(.*)$", Pattern.CASE_INSENSITIVE);
+  private static final Pattern LEGACY_EVENT_ERROR =
+      Pattern.compile("^OKX error:\\s*(.*?)\\s*\\(code:\\s*([0-9]+(?:_[0-9]+)?)\\)\\s*$", Pattern.CASE_INSENSITIVE);
+  private static final Pattern NATIVE_ERROR_CODE =
+      Pattern.compile("^([0-9]+)(?:_[0-9]+)?$");
+
+  /**
+   * Canonical public error entry point for every OKX REST and WebSocket response.
+   * Deterministic codes receive their specific XChange type; unknown and indeterminate codes remain
+   * plain {@link ExchangeException}s.
+   */
+  public static ExchangeException adaptError(String rawCode, String message) {
+    String normalizedCode = rawCode;
+    String normalizedMessage = message;
+    if (normalizedMessage != null) {
+      Matcher canonical = CANONICAL_ERROR.matcher(normalizedMessage);
+      if (canonical.matches()) {
+        normalizedCode = canonical.group(1);
+        normalizedMessage = canonical.group(2);
+      } else {
+        Matcher legacy = LEGACY_EVENT_ERROR.matcher(normalizedMessage);
+        if (legacy.matches()) {
+          normalizedCode = legacy.group(2);
+          normalizedMessage = legacy.group(1);
+        }
+      }
+    }
+    if (normalizedCode == null || normalizedCode.trim().isEmpty()) {
+      normalizedCode = "unknown";
+    }
+    if (normalizedMessage == null || normalizedMessage.trim().isEmpty()) {
+      normalizedMessage = "No error details provided";
+    }
+    String preservedCode = normalizedCode.trim();
+    String preservedMessage = normalizedMessage.trim();
+    OkexException nativeCause = nativeErrorCause(preservedCode, preservedMessage);
+    return OkexErrorAdapter.adapt(preservedCode, preservedMessage, nativeCause);
+  }
+
+  private static OkexException nativeErrorCause(String rawCode, String message) {
+    Matcher numericCode = NATIVE_ERROR_CODE.matcher(rawCode);
+    if (!numericCode.matches()) {
+      return null;
+    }
+    try {
+      return new OkexException(message, Integer.parseInt(numericCode.group(1)));
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
+  public static ExchangeException adaptError(OkexException exception) {
+    if (exception == null) {
+      return new ExchangeException("OKX error unknown: No error details provided");
+    }
+    return OkexErrorAdapter.adapt(exception);
+  }
 
   public static UserTrades adaptUserTrades(
       List<OkexOrderDetails> okexTradeHistory, ExchangeMetaData exchangeMetaData) {

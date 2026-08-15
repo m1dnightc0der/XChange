@@ -13,7 +13,6 @@ import org.knowm.xchange.dto.trade.UserTrade;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
 import org.knowm.xchange.hyperliquid.HyperliquidAuthenticated;
-import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
 import org.knowm.xchange.hyperliquid.dto.Cloid;
 import org.knowm.xchange.hyperliquid.dto.trade.TimeInForce;
 import org.knowm.xchange.hyperliquid.service.HyperliquidAuth;
@@ -23,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import si.mazi.rescu.SynchronizedValueFactory;
 import org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -43,7 +43,7 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
 
     private final HyperliquidStreamingService service;
     private final HyperliquidAuth hyperliquidAuth;
-    private final int responseTimeout = 5000; // 5 second timeout for order placement
+    private final int responseTimeout;
     private final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
     private final SynchronizedValueFactory<Long> requestIdFactory =
             new AtomicLongIncrementalTime2014NonceFactory();
@@ -61,9 +61,18 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
             HyperliquidStreamingService service,
             HyperliquidAuth hyperliquidAuth,
             org.knowm.xchange.hyperliquid.service.HyperliquidMetadataLoader metadataLoader) {
+        this(service, hyperliquidAuth, metadataLoader, 5000);
+    }
+
+    HyperliquidStreamingTradeService(
+            HyperliquidStreamingService service,
+            HyperliquidAuth hyperliquidAuth,
+            org.knowm.xchange.hyperliquid.service.HyperliquidMetadataLoader metadataLoader,
+            int responseTimeout) {
         this.service = service;
         this.hyperliquidAuth = hyperliquidAuth;
         this.metadataLoader = metadataLoader;
+        this.responseTimeout = responseTimeout;
     }
 
     /**
@@ -136,71 +145,65 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
             .timeout(responseTimeout, MILLISECONDS)
             .blockingSingle();
 
-        // Action errors use the nested WebSocket post-response envelope.
-        JsonNode responsePayload = response.path("data").path("response").path("payload");
-        if ("err".equals(responsePayload.path("status").asText()) && responsePayload.has("response")) {
-            String error = responsePayload.get("response").asText();
-            limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-            throw orderPlacementFailure(error);
+        String explicitError = explicitMutationError(response);
+        if (explicitError != null) {
+            ExchangeException failure = orderPlacementFailure(explicitError);
+            if (failure.getClass() != ExchangeException.class) {
+                limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
+            }
+            throw failure;
         }
 
-        // Parse response
-        if (response.has("data") && response.get("data").has("response") && response.get("data").get("response").has("payload") && response.get("data").get("response").get("payload").has("response") && response.get("data").get("response").get("payload").get("response").has("data")) {
-            JsonNode data =response.get("data").get("response").get("payload").get("response").get("data");
+        JsonNode data = response.path("data").path("response").path("payload")
+                .path("response").path("data");
+        JsonNode statuses = data.path("statuses");
+        if (statuses.isArray() && !statuses.isEmpty()) {
+            JsonNode status = statuses.get(0);
 
-            // Check for success response
-            if (data.has("statuses") && data.get("statuses").isArray()
-                    && data.get("statuses").size() > 0) {
-                JsonNode status = data.get("statuses").get(0);
+            if (status.path("resting").hasNonNull("oid")) {
+                String orderId = status.path("resting").get("oid").asText();
+                LOG.info("Order placed successfully: {}", orderId);
+                return orderId;
+            }
 
-                if (status.has("resting")) {
-                    // Order successfully placed and resting on book
-                    JsonNode resting = status.get("resting");
-                    if (resting.has("oid")) {
-                        String orderId = resting.get("oid").asText();
-                        LOG.info("Order placed successfully: {}", orderId);
-                        return orderId;
-                    }
-                }
-
-                if (status.has("filled")) {
-                    // Order immediately filled
-                    JsonNode filled = status.get("filled");
-                    if (filled.has("oid")) {
-                        String orderId = filled.get("oid").asText();
-                        LOG.info("Order immediately filled: {}", orderId);
-                        return orderId;
-                    }
-                }
-
-                // Check for error in status
-                if (status.has("error")) {
-                    String error = status.get("error").asText();
-                    limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-                    throw orderPlacementFailure(error);
-                }
+            if (status.path("filled").hasNonNull("oid")) {
+                String orderId = status.path("filled").get("oid").asText();
+                LOG.info("Order immediately filled: {}", orderId);
+                return orderId;
             }
         }
 
-        // Check for error response
-        if (response.has("response") && response.get("response").has("error")) {
-            String error = response.get("response").get("error").asText();
-            limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-            throw orderPlacementFailure(error);
+        LOG.error("Unexpected response format: {}", response);
+        throw new IOException("Unexpected response format from exchange");
+    }
+
+    private String explicitMutationError(JsonNode response) {
+        JsonNode responsePayload = response.path("data").path("response").path("payload");
+        if ("err".equals(responsePayload.path("status").asText())) {
+            return explicitText(responsePayload.get("response"));
         }
 
-        // Unexpected response format
-        LOG.error("Unexpected response format: {}", response.toString());
-        limitOrder.setOrderStatus(Order.OrderStatus.REJECTED);
-        throw new ExchangeException("Unexpected response format from exchange");
+        JsonNode statuses = responsePayload.path("response").path("data").path("statuses");
+        if (statuses.isArray() && !statuses.isEmpty()) {
+            String statusError = explicitText(statuses.get(0).get("error"));
+            if (statusError != null) {
+                return statusError;
+            }
+        }
+
+        String directError = explicitText(response.path("response").get("error"));
+        return directError != null ? directError : explicitText(response.get("error"));
+    }
+
+    private String explicitText(JsonNode node) {
+        if (node == null || !node.isTextual() || node.asText().trim().isEmpty()) {
+            return null;
+        }
+        return node.asText();
     }
 
     private ExchangeException orderPlacementFailure(String error) {
-        org.knowm.xchange.exceptions.NonceException nonceFailure =
-                HyperliquidExceptionAdapter.nonceException(error);
-        return nonceFailure != null
-                ? nonceFailure
-                : new ExchangeException("Order placement failed: " + error);
+        return HyperliquidAdapters.adaptError("Order placement failed: ", error);
     }
 
     /**

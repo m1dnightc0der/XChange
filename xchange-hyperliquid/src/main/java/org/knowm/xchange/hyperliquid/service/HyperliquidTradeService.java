@@ -11,7 +11,6 @@ import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotAvailableFromExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.hyperliquid.HyperliquidAdapters;
-import org.knowm.xchange.hyperliquid.HyperliquidExceptionAdapter;
 import org.knowm.xchange.hyperliquid.HyperliquidExchange;
 import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
 import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
@@ -99,30 +98,41 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
         // and extract the order ID or handle errors appropriately
 
         // Check if response indicates success and extract order ID
-        if (rawResponse != null && rawResponse.isSuccess()) {
-            PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
-            if (orderData != null && orderData.getData() != null &&
-                    orderData.getData().getStatuses() != null &&
-                    !orderData.getData().getStatuses().isEmpty()) {
-
-                PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
-                Long orderId = status.getOrderId();
-
-                if (orderId != null) {
-                    return orderId.toString();
-                } else if (status.hasError()) {
-                    throw exchangeFailure("Order placement failed: ", status.getError());
-                } else {
-                    throw new IOException("Order placement failed: no order ID returned");
-                }
-            } else {
-                throw new IOException("Order placement failed: invalid response structure");
-            }
-        } else if (rawResponse != null && rawResponse.isError()) {
-            throw exchangeFailure("Order placement failed: ", rawResponse.getErrorMessage());
-        } else {
+        if (rawResponse == null) {
             throw new IOException("Failed to place limit order - no response received");
         }
+        if (rawResponse.isSuccess()) {
+            PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
+            if (orderData == null || orderData.getData() == null ||
+                    orderData.getData().getStatuses() == null ||
+                    orderData.getData().getStatuses().isEmpty() ||
+                    orderData.getData().getStatuses().get(0) == null) {
+                throw new IOException("Order placement failed: invalid response structure");
+            }
+
+            PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
+            Long orderId = status.getOrderId();
+
+            if (orderId != null) {
+                return orderId.toString();
+            } else if (status.hasError()) {
+                String error = status.getError();
+                if (error.trim().isEmpty()) {
+                    throw new IOException("Order placement failed: invalid error response");
+                }
+                throw exchangeFailure("Order placement failed: ", error);
+            } else {
+                throw new IOException("Order placement failed: no order ID returned");
+            }
+        }
+        if (rawResponse.isError()) {
+            String error = rawResponse.getErrorMessage();
+            if (error == null || error.trim().isEmpty()) {
+                throw new IOException("Order placement failed: invalid error response");
+            }
+            throw exchangeFailure("Order placement failed: ", error);
+        }
+        throw new IOException("Order placement failed: invalid response structure");
     }
 
     @Override
@@ -172,38 +182,45 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
 
 
         // Check if response indicates success and extract order ID
-        if (rawResponse != null && rawResponse.isSuccess()) {
-            PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
-            if (orderData != null && orderData.getData() != null &&
-                    orderData.getData().getStatuses() != null &&
-                    !orderData.getData().getStatuses().isEmpty()) {
-
-                PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
-                Long newOrderId = status.getOrderId();
-
-                if (newOrderId != null) {
-                    return newOrderId.toString();
-                } else if (status.hasError()) {
-                    throw exchangeFailure("Order modification failed: ", status.getError());
-                } else {
-                    throw new IOException("Order modification failed: no order ID returned");
-                }
-            } else if (orderData.getType() != null) {
-                return null;
-            } else {
-                throw new IOException("Order modification failed: invalid response structure");
-            }
-        } else if (rawResponse != null && rawResponse.isError()) {
-            throw exchangeFailure("Order modification failed: ", rawResponse.getErrorMessage());
-        } else {
+        if (rawResponse == null) {
             throw new IOException("Failed to modify order - no response received");
         }
+        if (rawResponse.isSuccess()) {
+            PlaceOrderResponse.OrderResponseData orderData = rawResponse.getOrderResponseData();
+            if (orderData == null || orderData.getData() == null ||
+                    orderData.getData().getStatuses() == null ||
+                    orderData.getData().getStatuses().isEmpty() ||
+                    orderData.getData().getStatuses().get(0) == null) {
+                throw new IOException("Order modification failed: invalid response structure");
+            }
+
+            PlaceOrderResponse.OrderStatus status = orderData.getData().getStatuses().get(0);
+            Long newOrderId = status.getOrderId();
+
+            if (newOrderId != null) {
+                return newOrderId.toString();
+            } else if (status.hasError()) {
+                String error = status.getError();
+                if (error.trim().isEmpty()) {
+                    throw new IOException("Order modification failed: invalid error response");
+                }
+                throw exchangeFailure("Order modification failed: ", error);
+            } else {
+                throw new IOException("Order modification failed: no order ID returned");
+            }
+        }
+        if (rawResponse.isError()) {
+            String error = rawResponse.getErrorMessage();
+            if (error == null || error.trim().isEmpty()) {
+                throw new IOException("Order modification failed: invalid error response");
+            }
+            throw exchangeFailure("Order modification failed: ", error);
+        }
+        throw new IOException("Order modification failed: invalid response structure");
     }
 
     private ExchangeException exchangeFailure(String prefix, String message) {
-        org.knowm.xchange.exceptions.NonceException nonceFailure =
-                HyperliquidExceptionAdapter.nonceException(message);
-        return nonceFailure != null ? nonceFailure : new ExchangeException(prefix + message);
+        return HyperliquidAdapters.adaptError(prefix, message);
     }
 
     @Override
@@ -217,37 +234,65 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
 
         HyperliquidResponse response;
         if (orderId.matches("\\d+")) {
-            response = super.cancel(symbol, orderId);
+            response = cancelOrderRaw(symbol, orderId);
         } else {
-            response = super.cancelByCloid(symbol, orderId);
+            response = cancelOrderByCloidRaw(symbol, orderId);
         }
-        if (response != null && response.getStatus().equals("err")) {
-            String message =
-                    response.getResult() != null
-                            ? response.getResult().toString()
-                            : "Failed to cancel order ID " + orderId;
-            org.knowm.xchange.exceptions.NonceException nonceFailure =
-                    HyperliquidExceptionAdapter.nonceException(message);
-            if (nonceFailure != null) {
-                throw nonceFailure;
-            }
-            throw new IOException(message);
+        if (response == null) {
+            throw new IOException("Order cancellation failed: no response received");
         }
-        // Result can be a Map (success) or String (error message)
-        // For success, the structure is: {"type": "cancel", "data": {"statuses": ["success"]}}
-        Map result = (Map) response.getResult();
-
-        // Optionally validate the response structure
-        if (result instanceof java.util.Map) {
-            @SuppressWarnings("unchecked")
-            java.util.Map<String, Object> resultMap = (java.util.Map<String, Object>) result;
-            String type = (String) resultMap.get("type");
-            if (!"cancel".equals(type)) {
-                throw new IOException("Unexpected response type: " + type);
+        if ("err".equals(response.getStatus())) {
+            if (!(response.getResult() instanceof String) ||
+                    ((String) response.getResult()).trim().isEmpty()) {
+                throw new IOException("Order cancellation failed: invalid error response");
             }
+            throw exchangeFailure("Order cancellation failed: ", (String) response.getResult());
+        }
+        if (!"ok".equals(response.getStatus()) || !(response.getResult() instanceof Map)) {
+            throw new IOException("Order cancellation failed: invalid response structure");
         }
 
-        return true;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultMap = (Map<String, Object>) response.getResult();
+        String type = (String) resultMap.get("type");
+        if (!"cancel".equals(type)) {
+            throw new IOException("Unexpected response type: " + type);
+        }
+
+        Object data = resultMap.get("data");
+        if (!(data instanceof Map)) {
+            throw new IOException("Order cancellation failed: invalid response structure");
+        }
+        Object statuses = ((Map<?, ?>) data).get("statuses");
+        if (!(statuses instanceof List) || ((List<?>) statuses).isEmpty()) {
+            throw new IOException("Order cancellation failed: invalid response structure");
+        }
+
+        Object status = ((List<?>) statuses).get(0);
+        if ("success".equals(status)) {
+            return true;
+        }
+        String statusError = cancellationStatusError(status);
+        if (statusError != null) {
+            throw exchangeFailure("Order cancellation failed: ", statusError);
+        }
+        throw new IOException("Order cancellation failed: invalid response structure");
+    }
+
+    private String cancellationStatusError(Object status) {
+        Object error = status instanceof Map ? ((Map<?, ?>) status).get("error") : status;
+        return error instanceof String && !((String) error).trim().isEmpty()
+                ? (String) error
+                : null;
+    }
+
+    protected HyperliquidResponse cancelOrderRaw(String symbol, String orderId) throws IOException {
+        return super.cancel(symbol, orderId);
+    }
+
+    protected HyperliquidResponse cancelOrderByCloidRaw(String symbol, String orderId)
+            throws IOException {
+        return super.cancelByCloid(symbol, orderId);
     }
 
     @Override

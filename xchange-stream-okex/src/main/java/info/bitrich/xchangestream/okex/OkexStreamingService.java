@@ -2,6 +2,7 @@ package info.bitrich.xchangestream.okex;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import info.bitrich.xchangestream.okex.dto.OkexLoginMessage;
 import info.bitrich.xchangestream.okex.dto.OkexSubscribeMessage;
 import info.bitrich.xchangestream.okex.dto.OkexUnSubscribeMessage;
@@ -15,6 +16,7 @@ import io.reactivex.rxjava3.disposables.Disposable;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
+import org.knowm.xchange.okex.OkexAdapters;
 import org.knowm.xchange.okex.dto.OkexInstType;
 import org.knowm.xchange.service.BaseParamsDigest;
 import org.slf4j.Logger;
@@ -30,6 +32,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,6 +43,10 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   protected final Map<String, Subscription> subscriptions = new ConcurrentHashMap<>();
   private static final String LOGIN_SIGN_METHOD = "GET";
   private static final String LOGIN_SIGN_REQUEST_PATH = "/users/self/verify";
+  private static final String REDACTED_LOGIN_MESSAGE =
+      "{\"op\":\"login\",\"args\":\"[REDACTED]\"}";
+  private static final String REDACTED_MALFORMED_MESSAGE =
+      "{\"message\":\"[REDACTED]\",\"reason\":\"invalid JSON\"}";
 
   private static final String SUBSCRIBE = "subscribe";
   private static final String UNSUBSCRIBE = "unsubscribe";
@@ -71,6 +78,63 @@ public class OkexStreamingService extends JsonNettyStreamingService {
   ExchangeSpecification getExchangeSpecification(){
     return this.xSpec;
   }
+
+  @Override
+  protected String sanitizeMessageForLogging(String message) {
+    if (message == null) {
+      return null;
+    }
+    try {
+      JsonNode parsed = objectMapper.reader()
+          .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+          .readTree(message);
+      if (parsed == null || parsed.isMissingNode()) {
+        return REDACTED_MALFORMED_MESSAGE;
+      }
+      if (!"login".equals(parsed.path("op").asText())) {
+        return message;
+      }
+      Iterator<String> rootFields = parsed.fieldNames();
+      while (rootFields.hasNext()) {
+        String field = rootFields.next();
+        if (!"op".equals(field) && !"args".equals(field)) {
+          return REDACTED_LOGIN_MESSAGE;
+        }
+      }
+      JsonNode sanitized = parsed.deepCopy();
+      JsonNode arguments = sanitized.path("args");
+      if (!arguments.isArray() || arguments.isEmpty()) {
+        return REDACTED_LOGIN_MESSAGE;
+      }
+      for (JsonNode argument : arguments) {
+        if (!(argument instanceof ObjectNode)) {
+          return REDACTED_LOGIN_MESSAGE;
+        }
+        ObjectNode loginArgument = (ObjectNode) argument;
+        Iterator<String> loginFields = loginArgument.fieldNames();
+        while (loginFields.hasNext()) {
+          String field = loginFields.next();
+          if (!"apiKey".equals(field) && !"passphrase".equals(field)
+              && !"timestamp".equals(field) && !"sign".equals(field)) {
+            return REDACTED_LOGIN_MESSAGE;
+          }
+        }
+        if (!loginArgument.path("apiKey").isTextual()
+            || !loginArgument.path("passphrase").isTextual()
+            || !loginArgument.path("timestamp").isTextual()
+            || !loginArgument.path("sign").isTextual()) {
+          return REDACTED_LOGIN_MESSAGE;
+        }
+        loginArgument.put("apiKey", "[REDACTED]");
+        loginArgument.put("passphrase", "[REDACTED]");
+        loginArgument.put("sign", "[REDACTED]");
+      }
+      return objectMapper.writeValueAsString(sanitized);
+    } catch (IOException redactionFailure) {
+      return REDACTED_MALFORMED_MESSAGE;
+    }
+  }
+
   @Override public Completable connect() {
 
     LOG.debug("connect : called from {}", Thread.currentThread().getStackTrace()[2]);
@@ -232,7 +296,8 @@ public class OkexStreamingService extends JsonNettyStreamingService {
     }
 
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("login")) {
-      if (jsonNode.has("code") && jsonNode.get("code").textValue().equals("0")) {
+      String loginCode = jsonNode.has("code") ? jsonNode.get("code").asText() : null;
+      if ("0".equals(loginCode)) {
         isLoggedIn = true;
         LOG.info("OKX private websocket login succeeded");
 
@@ -247,25 +312,34 @@ public class OkexStreamingService extends JsonNettyStreamingService {
         } catch (IOException e) {
           throw new RuntimeException(e);
         }
+      } else if (loginCode != null) {
+        String loginMsg = jsonNode.has("msg") ? jsonNode.get("msg").asText() : "Login failed";
+        ExchangeException adaptedError = OkexAdapters.adaptError(loginCode, loginMsg);
+        isLoggedIn = false;
+        CompletableFuture<Void> future = loginFuture.get();
+        if (future != null && !future.isDone()) {
+          future.completeExceptionally(adaptedError);
+        }
+        propagateErrorToSingles(adaptedError);
       }
     }
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("error")) {
-      String errorCode = jsonNode.has("code") ? jsonNode.get("code").textValue() : "unknown";
-      String errorMsg = jsonNode.has("msg") ? jsonNode.get("msg").textValue() : "Unknown error";
+      String errorCode = jsonNode.has("code") ? jsonNode.get("code").asText() : "unknown";
+      String errorMsg = jsonNode.has("msg") ? jsonNode.get("msg").asText() : "Unknown error";
 
       // Handle authentication errors
-      if (errorCode.equals("60011") || errorCode.equals("60031")) {
+      if (hasBaseCode(errorCode, "60011") || hasBaseCode(errorCode, "60031")) {
         isLoggedIn = false;
         LOG.warn("OKX private websocket authentication error: {} (code: {})", errorMsg, errorCode);
 
         // Complete any pending login future exceptionally
         CompletableFuture<Void> future = loginFuture.get();
         if (future != null && !future.isDone()) {
-          future.completeExceptionally(new ExchangeException("Login failed: " + errorMsg + " (code: " + errorCode + ")"));
+          future.completeExceptionally(OkexAdapters.adaptError(errorCode, errorMsg));
         }
 
-        // Propagate error to all pending single emitters
-        propagateErrorToSingles(new ExchangeException("Authentication error: " + errorMsg + " (code: " + errorCode + ")"));
+        // Propagate the same canonical error to all pending single emitters.
+        propagateErrorToSingles(OkexAdapters.adaptError(errorCode, errorMsg));
 
         // Trigger re-login for subsequent requests
         try {
@@ -275,8 +349,8 @@ public class OkexStreamingService extends JsonNettyStreamingService {
           LOG.warn("Failed to re-login after auth error: {}", e.getMessage());
         }
       } else {
-        // For other errors, also propagate to singles
-        propagateErrorToSingles(new ExchangeException("OKX error: " + errorMsg + " (code: " + errorCode + ")"));
+        // For other errors, also propagate the canonical shared-adapter result.
+        propagateErrorToSingles(OkexAdapters.adaptError(errorCode, errorMsg));
       }
     }
 
@@ -361,6 +435,10 @@ public class OkexStreamingService extends JsonNettyStreamingService {
         handleMessage(jsonNode);
       }
     }
+  }
+
+  private boolean hasBaseCode(String rawCode, String expectedBaseCode) {
+    return expectedBaseCode.equals(rawCode) || rawCode.startsWith(expectedBaseCode + "_");
   }
 
   /**

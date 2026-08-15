@@ -12,11 +12,9 @@ import org.knowm.xchange.dto.Order;
 import org.knowm.xchange.dto.meta.ExchangeMetaData;
 import org.knowm.xchange.dto.trade.LimitOrder;
 import org.knowm.xchange.dto.trade.UserTrade;
-import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.ExchangeUnavailableException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.OkexAdapters;
-import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.trade.OkexOrderDetails;
 import org.knowm.xchange.okex.dto.trade.OkexOrderRequest;
 import org.knowm.xchange.utils.nonce.AtomicLongIncrementalTime2014NonceFactory;
@@ -84,18 +82,21 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();
         JsonNode orderResponse = response.get("data") == null ? null : response.get("data").get(0);
         if (orderResponse == null) {
-            throw new ExchangeException("OKX order response did not include data: " + response);
+            throw OkexAdapters.adaptError("unknown", "Order response did not include data: " + response);
         }
         JsonNode sCodeNode = orderResponse.get("sCode");
-        String sCode = sCodeNode == null ? null : sCodeNode.asText();
-        if (sCode != null && !"0".equals(sCode)) {
+        if (sCodeNode == null || sCodeNode.asText().isEmpty()) {
+            throw OkexAdapters.adaptError("unknown", "Order response did not include sCode: " + response);
+        }
+        String sCode = sCodeNode.asText();
+        if (!"0".equals(sCode)) {
             JsonNode sMsgNode = orderResponse.get("sMsg");
-            String sMsg = sMsgNode == null ? "OKX order placement failed" : sMsgNode.asText();
-            throw new OkexException(sMsg, Integer.parseInt(sCode));
+            String sMsg = sMsgNode == null ? "Order placement failed" : sMsgNode.asText();
+            throw OkexAdapters.adaptError(sCode, sMsg);
         }
         JsonNode ordIdNode = orderResponse.get("ordId");
         if (ordIdNode == null || ordIdNode.asText().isEmpty()) {
-            throw new ExchangeException("OKX successful order response did not include ordId: " + response);
+            throw OkexAdapters.adaptError("0", "Successful order response did not include ordId: " + response);
         }
         return ordIdNode.asText();
     }

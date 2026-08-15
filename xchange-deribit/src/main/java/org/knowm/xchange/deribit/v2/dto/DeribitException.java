@@ -10,7 +10,13 @@ public class DeribitException extends HttpStatusExceptionSupport {
   private final DeribitError error;
 
   public DeribitException(@JsonProperty("error") DeribitError error) {
-    super(error.getCode() + ": " + error.getMessage() + ", " + error.getData());
+    super(message(error));
     this.error = error;
+  }
+
+  private static String message(DeribitError error) {
+    return error == null
+        ? "No error details provided"
+        : error.getCode() + ": " + error.getMessage() + ", " + error.getData();
   }
 }

@@ -20,6 +20,10 @@ public class OkexException extends HttpStatusExceptionSupport {
     return message;
   }
 
+  public int getCode() {
+    return code;
+  }
+
   @Override
   public String toString() {
     return code + ":" + message;

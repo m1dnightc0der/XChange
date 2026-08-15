@@ -5,6 +5,10 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import info.bitrich.xchangestream.service.netty.ConnectionStateModel;
+import info.bitrich.xchangestream.service.netty.NettyStreamingService;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.reactivex.rxjava3.core.ObservableEmitter;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -34,6 +38,81 @@ public class OkexStreamingServiceLoginTest {
 
     service = new TestableOkexStreamingService("wss://test.okex.com", exchangeSpec);
     objectMapper = new ObjectMapper();
+  }
+
+  @Test
+  public void loginPayloadLoggingRedactsCredentialsWithoutChangingWirePayload() throws Exception {
+    String payload = "{\"op\":\"login\",\"args\":[{\"apiKey\":\"test-api-key\","
+        + "\"passphrase\":\"test-\\\"quoted\\\\secret\",\"timestamp\":\"123\","
+        + "\"sign\":\"test-signature\"}]}";
+
+    String wirePayload = service.sendAndCaptureWirePayload(payload);
+    String loggedPayload = service.getLastSanitizedMessage();
+
+    assertTrue(loggedPayload.contains("\"apiKey\":\"[REDACTED]\""));
+    assertTrue(loggedPayload.contains("\"passphrase\":\"[REDACTED]\""));
+    assertTrue(loggedPayload.contains("\"sign\":\"[REDACTED]\""));
+    assertFalse(loggedPayload.contains("test-api-key"));
+    assertFalse(loggedPayload.contains("quoted"));
+    assertFalse(loggedPayload.contains("secret"));
+    assertFalse(loggedPayload.contains("test-signature"));
+    assertEquals("the outbound frame must retain the exact original payload", payload, wirePayload);
+  }
+
+  @Test
+  public void unexpectedLoginShapeRedactsEntirePayload() {
+    String payload = "{\"op\":\"login\",\"args\":{\"apiKey\":\"shape-secret\"}}";
+
+    String loggedPayload = service.sanitizeForLogging(payload);
+
+    assertFalse(loggedPayload.contains("shape-secret"));
+    assertTrue(loggedPayload.contains("[REDACTED]"));
+  }
+
+  @Test
+  public void truncatedLoginPayloadRedactsEntirePayload() {
+    String payload = "{\"op\":\"login\",\"args\":[{\"apiKey\":\"truncated-secret";
+
+    String loggedPayload = service.sanitizeForLogging(payload);
+
+    assertFalse(loggedPayload.contains("truncated-secret"));
+    assertTrue(loggedPayload.contains("[REDACTED]"));
+  }
+
+  @Test
+  public void malformedEscapedLoginPayloadDoesNotBypassRedaction() {
+    String payload = "{\"op\":\"log\\u0069n\",\"args\":[{\"apiKey\":\"escaped-secret";
+
+    String loggedPayload = service.sanitizeForLogging(payload);
+
+    assertFalse(loggedPayload.contains("escaped-secret"));
+    assertTrue(loggedPayload.contains("[REDACTED]"));
+  }
+
+  @Test
+  public void trailingContentAndEmptyPayloadsFailClosed() {
+    String trailing = "{\"op\":\"subscribe\"} trailing-secret";
+
+    assertFalse(service.sanitizeForLogging(trailing).contains("trailing-secret"));
+    assertTrue(service.sanitizeForLogging(trailing).contains("[REDACTED]"));
+    assertTrue(service.sanitizeForLogging("   ").contains("[REDACTED]"));
+  }
+
+  @Test
+  public void unknownLoginFieldsRedactEntirePayload() {
+    String payload = "{\"op\":\"login\",\"args\":[{\"password\":\"unknown-secret\"}]}";
+
+    String loggedPayload = service.sanitizeForLogging(payload);
+
+    assertFalse(loggedPayload.contains("unknown-secret"));
+    assertTrue(loggedPayload.contains("[REDACTED]"));
+  }
+
+  @Test
+  public void nonLoginPayloadLoggingIsUnchanged() {
+    String payload = "{\"op\":\"subscribe\",\"args\":[{\"channel\":\"orders\"}]}";
+
+    assertEquals(payload, service.sanitizeForLogging(payload));
   }
 
   // ==================== login() Tests ====================
@@ -304,9 +383,51 @@ public class OkexStreamingServiceLoginTest {
    */
   static class TestableOkexStreamingService extends OkexStreamingService {
     private boolean skipActualLogin = true;
+    private String lastSanitizedMessage;
 
     public TestableOkexStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
       super(apiUrl, exchangeSpecification);
+    }
+
+    @Override
+    protected String sanitizeMessageForLogging(String message) {
+      lastSanitizedMessage = super.sanitizeMessageForLogging(message);
+      return lastSanitizedMessage;
+    }
+
+    String sanitizeForLogging(String message) {
+      return sanitizeMessageForLogging(message);
+    }
+
+    String getLastSanitizedMessage() {
+      return lastSanitizedMessage;
+    }
+
+    String sendAndCaptureWirePayload(String message) throws Exception {
+      EmbeddedChannel channel = new EmbeddedChannel();
+      java.lang.reflect.Field field = NettyStreamingService.class.getDeclaredField("webSocketChannel");
+      field.setAccessible(true);
+      field.set(this, channel);
+      java.lang.reflect.Field stateField =
+          NettyStreamingService.class.getDeclaredField("connectionStateModel");
+      stateField.setAccessible(true);
+      Object stateModel = stateField.get(this);
+      java.lang.reflect.Method setState =
+          ConnectionStateModel.class.getDeclaredMethod("setState", ConnectionStateModel.State.class);
+      setState.setAccessible(true);
+      setState.invoke(stateModel, ConnectionStateModel.State.OPEN);
+      try {
+        sendMessage(message).syncUninterruptibly();
+        TextWebSocketFrame frame = channel.readOutbound();
+        assertNotNull("sendMessage must emit a websocket frame", frame);
+        try {
+          return frame.text();
+        } finally {
+          frame.release();
+        }
+      } finally {
+        channel.finishAndReleaseAll();
+      }
     }
 
     // Expose the loginFuture for testing
