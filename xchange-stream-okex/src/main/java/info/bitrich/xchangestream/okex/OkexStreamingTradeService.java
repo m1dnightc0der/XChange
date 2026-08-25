@@ -52,13 +52,22 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         this.instrumentCodeMap = instrumentCodeMap;
     }
 
+    private ExchangeMetaData quantityConversionMetaData() {
+        return Boolean.TRUE.equals(
+                        service
+                                .getExchangeSpecification()
+                                .getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES))
+                ? exchangeMetaData
+                : null;
+    }
+
     @Override
     public String placeLimitOrder(LimitOrder limitOrder) throws Exception {
 
         ArrayList orderList = new ArrayList<OkexOrderMessage.OrderArg>();
         OkexOrderRequest okxOrder = OkexAdapters.adaptOrder(
                 limitOrder,
-                (Boolean.TRUE.equals(service.getExchangeSpecification().getExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES)) ? exchangeMetaData : null),
+                quantityConversionMetaData(),
                 "1",
                 instrumentCodeMap,
                 true  // USE instIdCode for WebSocket operations
@@ -80,7 +89,16 @@ public class OkexStreamingTradeService implements StreamingTradeService {
         }
 
         @NonNull JsonNode response = service.subscribeSingle(id, mapper.writeValueAsString(message)).timeout(1000, MILLISECONDS).blockingSingle();
-        JsonNode orderResponse = response.get("data") == null ? null : response.get("data").get(0);
+        JsonNode responseData = response.get("data");
+        if (responseData == null || !responseData.isArray() || responseData.size() == 0) {
+            throw OkexAdapters.adaptError("unknown", "Order response did not include data: " + response);
+        }
+        if (responseData.size() != 1) {
+            throw OkexAdapters.adaptError(
+                    "unknown",
+                    "Order response expected 1 row but received " + responseData.size() + ": " + response);
+        }
+        JsonNode orderResponse = responseData.get(0);
         if (orderResponse == null) {
             throw OkexAdapters.adaptError("unknown", "Order response did not include data: " + response);
         }
@@ -119,7 +137,8 @@ public class OkexStreamingTradeService implements StreamingTradeService {
                                                     .getTypeFactory()
                                                     .constructCollectionType(List.class, OkexOrderDetails.class));
                             return Observable.fromIterable(
-                                    OkexAdapters.adaptOrder(okexOrderDetails, exchangeMetaData));
+                                    OkexAdapters.adaptOrder(
+                                            okexOrderDetails, quantityConversionMetaData()));
                         });
     }
 
@@ -141,7 +160,11 @@ public class OkexStreamingTradeService implements StreamingTradeService {
                                                     .getTypeFactory()
                                                     .constructCollectionType(List.class, OkexOrderDetails.class));
                             return Observable.fromIterable(
-                                    OkexAdapters.adaptUserTrades(okexOrderDetails, exchangeMetaData).getUserTrades());
+                                    OkexAdapters.adaptUserTrades(
+                                                    okexOrderDetails,
+                                                    quantityConversionMetaData(),
+                                                    OkexAdapters.UserTradeSource.FILLS_CHANNEL)
+                                            .getUserTrades());
                         });
     }
 

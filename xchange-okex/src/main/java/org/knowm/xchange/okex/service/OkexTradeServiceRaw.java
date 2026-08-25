@@ -284,12 +284,12 @@ public class OkexTradeServiceRaw extends OkexBaseService {
     }
   }
 
-  public OkexResponse<List<OkexOrderResponse>> cancelOkexAlgoOrder(OkexCancelOrderRequest order)
-      throws IOException {
+  public OkexResponse<List<OkexOrderResponse>> cancelOkexAlgoOrder(
+      List<OkexCancelOrderRequest> orders) throws IOException {
     try {
       return decorateApiCall(
           () ->
-              okexAuthenticated.cancelOrder(
+              okexAuthenticated.cancelAlgoOrder(
                   exchange.getExchangeSpecification().getApiKey(),
                   signatureCreator,
                   DateUtils.toUTCISODateString(new Date()),
@@ -301,8 +301,8 @@ public class OkexTradeServiceRaw extends OkexBaseService {
                       exchange
                           .getExchangeSpecification()
                           .getExchangeSpecificParametersItem(PARAM_SIMULATED),
-                  order))
-          .withRateLimiter(rateLimiter(OkexAuthenticated.cancelOrderPath))
+                  orders))
+          .withRateLimiter(rateLimiter(OkexAuthenticated.cancelAlgoOrderPath))
           .call();
     } catch (OkexException e) {
       throw handleError(e);

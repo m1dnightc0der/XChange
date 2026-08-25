@@ -45,6 +45,18 @@ public class OkexPosition {
   @JsonProperty("markPx")
   private BigDecimal markPrice;
 
+  @JsonProperty("deltaBS")
+  private BigDecimal deltaBS;
+
+  @JsonProperty("gammaBS")
+  private BigDecimal gammaBS;
+
+  @JsonProperty("thetaBS")
+  private BigDecimal thetaBS;
+
+  @JsonProperty("vegaBS")
+  private BigDecimal vegaBS;
+
   @JsonProperty("upl")
   private BigDecimal unrealizedPnL;
 

@@ -29,6 +29,9 @@ import org.knowm.xchange.okex.dto.trade.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -41,6 +44,12 @@ public class OkexAdapters {
   public static final String SWAP = "SWAP";
   public static final String FUTURES = "FUTURES";
   public static final String OPTION = "OPTION";
+
+  public enum UserTradeSource {
+    ORDER_HISTORY,
+    FILLS_CHANNEL
+  }
+
   private static final String TRADING_WALLET_ID = "trading";
   private static final String FOUNDING_WALLET_ID = "founding";
   private static final String FUTURES_WALLET_ID = "futures";
@@ -50,6 +59,12 @@ public class OkexAdapters {
       Pattern.compile("^OKX error:\\s*(.*?)\\s*\\(code:\\s*([0-9]+(?:_[0-9]+)?)\\)\\s*$", Pattern.CASE_INSENSITIVE);
   private static final Pattern NATIVE_ERROR_CODE =
       Pattern.compile("^([0-9]+)(?:_[0-9]+)?$");
+  private static final Pattern XPERPETUAL_NATIVE_ID =
+      Pattern.compile("^([^-]+)-USD_UM_XPERP-([0-9]{6})$", Pattern.CASE_INSENSITIVE);
+  private static final Pattern OKEX_OPTION_NATIVE_ID =
+      Pattern.compile("^([A-Z0-9_]+)-([A-Z0-9_]+)-(\\d{6})-([0-9]+(?:\\.[0-9]+)?)-([CP])$");
+  private static final Pattern XPERPETUAL_PROMPT =
+      Pattern.compile("^UM_XPERP-([0-9]{6})$", Pattern.CASE_INSENSITIVE);
 
   /**
    * Canonical public error entry point for every OKX REST and WebSocket response.
@@ -105,34 +120,71 @@ public class OkexAdapters {
 
   public static UserTrades adaptUserTrades(
       List<OkexOrderDetails> okexTradeHistory, ExchangeMetaData exchangeMetaData) {
+    return adaptUserTrades(okexTradeHistory, exchangeMetaData, UserTradeSource.ORDER_HISTORY);
+  }
+
+  public static UserTrades adaptUserTrades(
+      List<OkexOrderDetails> okexTrades,
+      ExchangeMetaData exchangeMetaData,
+      UserTradeSource userTradeSource) {
     List<UserTrade> userTradeList = new ArrayList<>();
 
-    okexTradeHistory.forEach(
+    okexTrades.forEach(
         okexOrderDetails -> {
           Instrument instrument = adaptOkexInstrumentId(okexOrderDetails.getInstrumentId());
+          boolean fillsChannel = userTradeSource == UserTradeSource.FILLS_CHANNEL;
+          String amount =
+              fillsChannel
+                  ? okexOrderDetails.getLastFilledQuantity()
+                  : okexOrderDetails.getAmount();
+          String price =
+              fillsChannel
+                  ? okexOrderDetails.getLastFilledPrice()
+                  : okexOrderDetails.getAverageFilledPrice();
+          String tradeId =
+              fillsChannel ? okexOrderDetails.getLastTradeId() : okexOrderDetails.getOrderId();
+          long tradeTime =
+              fillsChannel
+                  ? adaptFillsTimestamp(okexOrderDetails)
+                  : Long.parseLong(okexOrderDetails.getUpdateTime());
           userTradeList.add(
               UserTrade.builder()
-                  .originalAmount(
-                      (exchangeMetaData==null ? new BigDecimal(okexOrderDetails.getAmount())  : convertContractSizeToVolume(
-                          okexOrderDetails.getAmount(),
-                          instrument,
-                          exchangeMetaData.getInstruments().get(instrument).getContractValue())))
-                          .instrument(instrument)
-                          .price(new BigDecimal(okexOrderDetails.getAverageFilledPrice()))
-                          .type(adaptOkexOrderSideToOrderType(okexOrderDetails.getSide()))
-                          .id(okexOrderDetails.getOrderId())
-                          .orderId(okexOrderDetails.getOrderId())
-                          .timestamp(
-                                  Date.from(
-                                          Instant.ofEpochMilli(Long.parseLong(okexOrderDetails.getUpdateTime()))))
-                          .feeAmount(new BigDecimal(okexOrderDetails.getFee()))
-                          .feeCurrency(new Currency(okexOrderDetails.getFeeCurrency()))
-                          .orderUserReference(okexOrderDetails.getClientOrderId())
-
-                          .build());
+                  .originalAmount(adaptInboundQuantity(amount, instrument, exchangeMetaData))
+                  .instrument(instrument)
+                  .price(new BigDecimal(price))
+                  .type(adaptOkexOrderSideToOrderType(okexOrderDetails.getSide()))
+                  .id(tradeId)
+                  .orderId(okexOrderDetails.getOrderId())
+                  .timestamp(Date.from(Instant.ofEpochMilli(tradeTime)))
+                  .feeAmount(new BigDecimal(okexOrderDetails.getFee()))
+                  .feeCurrency(new Currency(okexOrderDetails.getFeeCurrency()))
+                  .orderUserReference(okexOrderDetails.getClientOrderId())
+                  .build());
         });
 
     return new UserTrades(userTradeList, Trades.TradeSortType.SortByTimestamp);
+  }
+
+  private static long adaptFillsTimestamp(OkexOrderDetails orderDetails) {
+    String timestamp = orderDetails.getTimestamp();
+    if (timestamp == null) {
+      timestamp = orderDetails.getLastFilledTime();
+    }
+    if (timestamp == null || timestamp.trim().isEmpty()) {
+      throw new IllegalArgumentException(
+          String.format(
+              "Missing OKX fills timestamp for tradeId '%s' and orderId '%s'",
+              orderDetails.getLastTradeId(), orderDetails.getOrderId()));
+    }
+    try {
+      return Long.parseLong(timestamp);
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(
+          String.format(
+              "Invalid OKX fills timestamp '%s' for tradeId '%s' and orderId '%s'",
+              timestamp, orderDetails.getLastTradeId(), orderDetails.getOrderId()),
+          e);
+    }
   }
 
   public static List<LimitOrder> adaptOrder(List<OkexOrderDetails> orders, ExchangeMetaData exchangeMetaData) {
@@ -146,10 +198,7 @@ return orderList;
     Instrument instrument = adaptOkexInstrumentId(order.getInstrumentId());
     LimitOrder limitOrder = new LimitOrder(
         "buy".equals(order.getSide()) ? Order.OrderType.BID : Order.OrderType.ASK,
-        (( exchangeMetaData==null || exchangeMetaData.getInstruments() ==null)?  new BigDecimal(order.getAmount()) : convertContractSizeToVolume(
-            order.getAmount(),
-            instrument,
-            exchangeMetaData.getInstruments().get(instrument).getContractValue())),
+        adaptInboundQuantity(order.getAmount(), instrument, exchangeMetaData),
         instrument,
         order.getOrderId(),
         new Date(
@@ -158,10 +207,12 @@ return orderList;
                     ? order.getCreationTime()
                     : order.getUpdateTime())),
         new BigDecimal(order.getPrice()),
-        order.getAverageFilledPrice().isEmpty()
+        order.getAverageFilledPrice() == null || order.getAverageFilledPrice().isEmpty()
             ? BigDecimal.ZERO
             : new BigDecimal(order.getAverageFilledPrice()),
-        new BigDecimal(order.getAccumulatedFill()),
+        order.getAccumulatedFill() == null || order.getAccumulatedFill().isEmpty()
+            ? BigDecimal.ZERO
+            : adaptInboundQuantity(order.getAccumulatedFill(), instrument, exchangeMetaData),
         new BigDecimal(order.getFee()),
         "live".equals(order.getState())
             ? Order.OrderStatus.OPEN
@@ -187,7 +238,10 @@ return orderList;
     return OkexAmendOrderRequest.builder()
         .instrumentId(adaptInstrument(order.getInstrument()))
         .orderId(order.getId())
-        //.amendedAmount(exchangeMetaData==null ? order.getOriginalAmount().toString() : convertVolumeToContractSize(order, exchangeMetaData))
+        .amendedAmount(
+            order.getInstrument() instanceof OptionsContract
+                ? convertVolumeToContractSize(order, exchangeMetaData)
+                : null)
         .amendedPrice(order.getLimitPrice().toString())
         .build();
   }
@@ -220,7 +274,7 @@ return orderList;
         .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
         .clientOrderId(order.getUserReference())
         .orderType(OkexOrderType.market.name())
-        .amount(exchangeMetaData==null ? order.getOriginalAmount().toString(): convertVolumeToContractSize(order, exchangeMetaData))
+        .amount(convertVolumeToContractSize(order, exchangeMetaData))
         .build();
   }
   public static OkexOrderRequest adaptOrder(StopOrder order, ExchangeMetaData exchangeMetaData) {
@@ -253,8 +307,7 @@ return orderList;
           .takeProfitTriggerPrice(order.getStopPrice().toString())
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
           .orderType(OkexOrderType.conditional.name())
-          .amount(exchangeMetaData == null ? order.getOriginalAmount().toString() :
-              convertVolumeToContractSize(order, exchangeMetaData))
+          .amount(convertVolumeToContractSize(order, exchangeMetaData))
           .build();
     } else {
       return OkexOrderRequest.builder()
@@ -268,8 +321,7 @@ return orderList;
           .stopLossTriggerPrice(order.getStopPrice().toString())
           .orderType(OkexOrderType.conditional.name())
           .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
-          .amount(exchangeMetaData == null ? order.getOriginalAmount().toString() :
-              convertVolumeToContractSize(order, exchangeMetaData))
+          .amount(convertVolumeToContractSize(order, exchangeMetaData))
           .build();
     }
   }
@@ -278,22 +330,70 @@ return orderList;
    * contract_size to volume: crypto-margined contracts：contract_size,volume(contract_size to
    * volume:volume = sz*ctVal/price) USDT-margined contracts:sz,volume,USDT(contract_size to
    * volume:volume = contract_size*ctVal;contract_size to USDT:volume = contract_size*ctVal*price)
-   * OPTION:volume = sz*ctMult volume to contract_size: crypto-margined
+   * OPTION base amount = contract count * ctVal; reverse conversion is contract count = base
+   * amount / ctVal. Volume to contract_size for crypto-margined
    * contracts：contract_size,volume(coin to contract_size:contract_size = volume*price/ctVal)
    * USDT-margined contracts:contract_size,volume,USDT(coin to contract_size:contract_size =
    * volume/ctVal;USDT to contract_size:contract_size = volume/ctVal/price)
    */
   private static String convertVolumeToContractSize(
       Order order, ExchangeMetaData exchangeMetaData) {
-    return  order.getOriginalAmount().toString();
+    if (!(order.getInstrument() instanceof OptionsContract)) {
+      return order.getOriginalAmount().toString();
+    }
+    if (exchangeMetaData == null) {
+      return order.getOriginalAmount().toPlainString();
+    }
+
+    String instrumentId = adaptInstrument(order.getInstrument());
+    BigDecimal contractValue =
+        requirePositiveOptionContractValue(
+            getContractValue(exchangeMetaData, order.getInstrument()), instrumentId);
+    BigDecimal configuredAmountStep = getAmountStepSize(exchangeMetaData, order.getInstrument());
+    BigDecimal amountStep = configuredAmountStep == null ? contractValue : configuredAmountStep;
+    if (amountStep.signum() <= 0) {
+      throw new IllegalArgumentException(
+          "OKX option " + instrumentId + " requires a positive amount step size");
+    }
+
+    try {
+      order.getOriginalAmount().divide(amountStep, 0, RoundingMode.UNNECESSARY);
+      return order
+          .getOriginalAmount()
+          .divide(contractValue)
+          .stripTrailingZeros()
+          .toPlainString();
+    } catch (ArithmeticException exception) {
+      throw new IllegalArgumentException(
+          "OKX option amount "
+              + order.getOriginalAmount().toPlainString()
+              + " must be an exact multiple of base amount step "
+              + amountStep.toPlainString()
+              + " for "
+              + instrumentId,
+          exception);
+    }
+  }
+
+  private static BigDecimal adaptInboundQuantity(
+      String okexSize, Instrument instrument, ExchangeMetaData exchangeMetaData) {
+    if (exchangeMetaData == null) {
+      return new BigDecimal(okexSize).stripTrailingZeros();
+    }
+    return convertContractSizeToVolume(
+        okexSize, instrument, getContractValue(exchangeMetaData, instrument));
   }
 
   private static BigDecimal convertContractSizeToVolume(
       String okexSize, Instrument instrument, BigDecimal contractValue) {
-    return //(instrument instanceof FuturesContract)
-       // ? new BigDecimal(okexSize).multiply(contractValue).stripTrailingZeros()
-    //    :
-    new BigDecimal(okexSize).stripTrailingZeros();
+    BigDecimal contractSize = new BigDecimal(okexSize);
+    if (!(instrument instanceof OptionsContract)) {
+      return contractSize.stripTrailingZeros();
+    }
+
+    return contractSize
+        .multiply(requirePositiveOptionContractValue(contractValue, adaptInstrument(instrument)))
+        .stripTrailingZeros();
   }
 
   private static String adaptTradeMode(Instrument instrument, String accountLevel) {
@@ -334,8 +434,7 @@ return orderList;
         .clientOrderId(order.getUserReference())
         .reducePosition(order.hasFlag(OkexOrderFlags.REDUCE_ONLY))
         .orderType(adaptOrderType(order.getOrderFlags(), order.getInstrument()))
-        .amount(exchangeMetaData==null ? order.getOriginalAmount().toString() :
-            convertVolumeToContractSize(order, exchangeMetaData))
+        .amount(convertVolumeToContractSize(order, exchangeMetaData))
         .price(order.getLimitPrice().toString())
         .build();
   }
@@ -427,6 +526,10 @@ return orderList;
   }
 
   public static Ticker adaptTicker(OkexTicker okexTicker) {
+    boolean derivativeTicker =
+        SWAP.equals(okexTicker.getInstrumentType())
+            || FUTURES.equals(okexTicker.getInstrumentType());
+
     return new Ticker.Builder()
         .instrument(adaptOkexInstrumentId(okexTicker.getInstrumentId()))
         .open(okexTicker.getOpen24h())
@@ -436,10 +539,12 @@ return orderList;
         .high(okexTicker.getHigh24h())
         .low(okexTicker.getLow24h())
         // .vwap(null)
-        .volume((okexTicker.getInstrumentType().equals("SWAP") || okexTicker.getInstrumentType().equals("FUTURES")) ?
-            okexTicker.getVolumeCurrency24h() : okexTicker.getVolume24h())
-        .quoteVolume((okexTicker.getInstrumentType().equals("SWAP") || okexTicker.getInstrumentType().equals("FUTURES")) ?
-            okexTicker.getVolumeCurrency24h().multiply(okexTicker.getLast()) : okexTicker.getVolumeCurrency24h())
+        .volume(derivativeTicker ? okexTicker.getVolumeCurrency24h() : okexTicker.getVolume24h())
+        .quoteVolume(
+            derivativeTicker
+                ? okexTicker.getVolumeCurrency24h().multiply(okexTicker.getLast())
+                : okexTicker.getVolumeCurrency24h())
+        .indexPrice(derivativeTicker ? okexTicker.getLast() : null)
         .timestamp(okexTicker.getTimestamp())
         .bidSize(okexTicker.getBidSize())
         .askSize(okexTicker.getAskSize())
@@ -448,6 +553,25 @@ return orderList;
   }
 
   public static Instrument adaptOkexInstrumentId(String instrumentId) {
+    Matcher xperpetualMatcher = XPERPETUAL_NATIVE_ID.matcher(instrumentId);
+    if (xperpetualMatcher.matches()) {
+      return new FuturesContract(
+          new CurrencyPair(xperpetualMatcher.group(1), "USD"),
+          "UM_XPERP-" + xperpetualMatcher.group(2));
+    }
+
+    Matcher optionMatcher = OKEX_OPTION_NATIVE_ID.matcher(instrumentId);
+    if (optionMatcher.matches()) {
+      return new OptionsContract(
+          String.join(
+              "/",
+              optionMatcher.group(1),
+              optionMatcher.group(2),
+              optionMatcher.group(3),
+              optionMatcher.group(4),
+              optionMatcher.group(5)));
+    }
+
     String[] tokens = instrumentId.split("-");
     if (tokens.length == 2) {
       // SPOT or Margin
@@ -455,15 +579,58 @@ return orderList;
     } else if (tokens.length == 3) {
       // Future Or Swap
       return new FuturesContract(instrumentId.replace("-", "/"));
-    } else if (tokens.length == 5) {
-      // Option
-      return new OptionsContract(instrumentId.replace("-", "/"));
     }
     return null;
   }
 
   public static String adaptInstrument(Instrument instrument) {
+    if (instrument instanceof FuturesContract) {
+      FuturesContract futuresContract = (FuturesContract) instrument;
+      Matcher xperpetualMatcher = XPERPETUAL_PROMPT.matcher(futuresContract.getPrompt());
+      if (xperpetualMatcher.matches()) {
+        return futuresContract.getBase().getCurrencyCode()
+            + "-USD_UM_XPERP-"
+            + xperpetualMatcher.group(1);
+      }
+    }
     return instrument.toString().replace('/', '-');
+  }
+
+  public static FuturesContract resolveXPerpetualInstrument(
+      ExchangeMetaData exchangeMetaData,
+      FuturesContract requestedInstrument,
+      Instant now) {
+    if (!"XPERP".equalsIgnoreCase(requestedInstrument.getPrompt())) {
+      throw new IllegalArgumentException(
+          "Expected FuturesContract prompt XPERP: " + requestedInstrument);
+    }
+
+    String requestedBase = requestedInstrument.getBase().getCurrencyCode();
+    return exchangeMetaData.getInstruments().keySet().stream()
+        .filter(FuturesContract.class::isInstance)
+        .map(FuturesContract.class::cast)
+        .filter(
+            candidate ->
+                requestedBase.equalsIgnoreCase(candidate.getBase().getCurrencyCode()))
+        .filter(candidate -> "USD".equalsIgnoreCase(candidate.getCounter().getCurrencyCode()))
+        .filter(candidate -> XPERPETUAL_PROMPT.matcher(candidate.getPrompt()).matches())
+        .filter(candidate -> xperpetualExpiry(candidate).isAfter(now))
+        .min(Comparator.comparing(OkexAdapters::xperpetualExpiry))
+        .orElseThrow(
+            () ->
+                new IllegalArgumentException(
+                    "No live XPerpetual metadata for " + requestedInstrument));
+  }
+
+  private static Instant xperpetualExpiry(FuturesContract instrument) {
+    Matcher matcher = XPERPETUAL_PROMPT.matcher(instrument.getPrompt());
+    if (!matcher.matches()) {
+      throw new IllegalArgumentException(
+          "Invalid XPerpetual metadata prompt: " + instrument.getPrompt());
+    }
+    return LocalDate.parse(matcher.group(1), DateTimeFormatter.ofPattern("yyMMdd"))
+        .atTime(8, 0)
+        .toInstant(ZoneOffset.UTC);
   }
 
   /**
@@ -568,29 +735,45 @@ return orderList;
           && !pair.getCounter().equals(Currency.USDT)) {
         continue;
       }
+      boolean swap = instrument.getInstrumentType().equals(OkexInstType.SWAP.name());
+      boolean option = instrument.getInstrumentType().equals(OkexInstType.OPTION.name());
+      BigDecimal contractValue =
+          option
+              ? requirePositiveOptionContractValue(
+                  parseOptionContractValue(
+                      instrument.getContractValue(), instrument.getInstrumentId()),
+                  instrument.getInstrumentId())
+              : swap ? new BigDecimal(instrument.getContractValue()) : null;
+      BigDecimal minimumAmount =
+          swap
+              ? convertContractSizeToVolume(instrument.getMinSize(), pair, contractValue)
+              : new BigDecimal(instrument.getMinSize());
+      BigDecimal amountStepSize = null;
+      if (option) {
+        minimumAmount = minimumAmount.multiply(contractValue);
+        if (instrument.getLotSize() != null && !instrument.getLotSize().isEmpty()) {
+          amountStepSize = new BigDecimal(instrument.getLotSize()).multiply(contractValue);
+        }
+      }
+      int volumeScale =
+          swap
+              ? minimumAmount.scale()
+              : option
+                  ? Math.max(
+                      Math.max(minimumAmount.stripTrailingZeros().scale(), 0),
+                      amountStepSize == null
+                          ? 0
+                          : Math.max(amountStepSize.stripTrailingZeros().scale(), 0))
+                  : Math.max(numberOfDecimals(minimumAmount), 0);
+
       instrumentMetaData.put(
           pair,
           new InstrumentMetaData.Builder()
               .tradingFee(new BigDecimal(makerFee).negate())
-              .minimumAmount(
-                  (instrument.getInstrumentType().equals(OkexInstType.SWAP.name()))
-                      ? convertContractSizeToVolume(
-                          instrument.getMinSize(),
-                          pair,
-                          new BigDecimal(instrument.getContractValue()))
-                      : new BigDecimal(instrument.getMinSize()))
-              .volumeScale(
-                  (instrument.getInstrumentType().equals(OkexInstType.SWAP.name()))
-                      ? convertContractSizeToVolume(
-                              instrument.getMinSize(),
-                              pair,
-                              new BigDecimal(instrument.getContractValue()))
-                          .scale()
-                      : Math.max(numberOfDecimals(new BigDecimal(instrument.getMinSize())), 0))
-              .contractValue(
-                  (instrument.getInstrumentType().equals(OkexInstType.SWAP.name()))
-                      ? new BigDecimal(instrument.getContractValue())
-                      : null)
+              .minimumAmount(minimumAmount)
+              .amountStepSize(amountStepSize)
+              .volumeScale(volumeScale)
+              .contractValue(contractValue)
               .priceScale(numberOfDecimals(new BigDecimal(instrument.getTickSize())))
               .tradingFeeCurrency(Objects.requireNonNull(pair).getCounter())
               .marketOrderEnabled(true)
@@ -691,33 +874,91 @@ return orderList;
     positions
         .getData()
         .forEach(
-            okexPosition ->
-                openPositions.add(
-                    new OpenPosition.Builder()
-                        .instrument(adaptOkexInstrumentId(okexPosition.getInstrumentId()))
-                        .liquidationPrice(okexPosition.getLiquidationPrice())
-                        .price(okexPosition.getAverageOpenPrice())
-                        .type(adaptOpenPositionType(okexPosition))
-                            .notionalValue(adaptOpenPositionType(okexPosition).equals(OpenPosition.Type.SHORT) ? okexPosition.getNotionalUsd().abs().negate() : okexPosition.getNotionalUsd().abs())
-                        .size(adaptOpenPositionType(okexPosition).equals(OpenPosition.Type.SHORT) ?
-                            okexPosition
-                                .getPosition()
-                                .abs().negate()
-                                .multiply((exchangeMetaData==null )  ? BigDecimal.ONE :
-                                    exchangeMetaData
-                                        .getInstruments()
-                                        .get(adaptOkexInstrumentId(okexPosition.getInstrumentId()))
-                                        .getContractValue()) : okexPosition
-                                .getPosition()
-                                .abs()
-                                .multiply((exchangeMetaData==null )  ? BigDecimal.ONE :
-                                        exchangeMetaData
-                                                .getInstruments()
-                                                .get(adaptOkexInstrumentId(okexPosition.getInstrumentId()))
-                                                .getContractValue()))
-                        .unRealisedPnl(okexPosition.getUnrealizedPnL())
-                        .build()));
+            okexPosition -> {
+              Instrument instrument = adaptOkexInstrumentId(okexPosition.getInstrumentId());
+              OpenPosition.Type type = adaptOpenPositionType(okexPosition);
+              BigDecimal contractValue = getContractValue(exchangeMetaData, instrument);
+              if (exchangeMetaData != null
+                  && (instrument instanceof OptionsContract
+                      || OkexInstType.OPTION.name().equals(okexPosition.getInstrumentType()))) {
+                contractValue =
+                    requirePositiveOptionContractValue(
+                        contractValue, okexPosition.getInstrumentId());
+              } else if (contractValue == null) {
+                contractValue = BigDecimal.ONE;
+              }
+
+              openPositions.add(
+                  new OpenPosition.Builder()
+                      .instrument(instrument)
+                      .liquidationPrice(okexPosition.getLiquidationPrice())
+                      .price(okexPosition.getAverageOpenPrice())
+                      .markPrice(okexPosition.getMarkPrice())
+                      .type(type)
+                      .notionalValue(signedValue(okexPosition.getNotionalUsd(), type))
+                      .size(
+                          signedValue(
+                              okexPosition.getPosition().multiply(contractValue), type))
+                      .unRealisedPnl(okexPosition.getUnrealizedPnL())
+                      .delta(okexPosition.getDeltaBS())
+                      .gamma(okexPosition.getGammaBS())
+                      .theta(okexPosition.getThetaBS())
+                      .vega(okexPosition.getVegaBS())
+                      .build());
+            });
     return new OpenPositions(openPositions);
+  }
+
+  private static BigDecimal getContractValue(
+      ExchangeMetaData exchangeMetaData, Instrument instrument) {
+    if (exchangeMetaData == null
+        || exchangeMetaData.getInstruments() == null
+        || instrument == null) {
+      return null;
+    }
+    InstrumentMetaData instrumentMetaData = exchangeMetaData.getInstruments().get(instrument);
+    return instrumentMetaData == null ? null : instrumentMetaData.getContractValue();
+  }
+
+  private static BigDecimal getAmountStepSize(
+      ExchangeMetaData exchangeMetaData, Instrument instrument) {
+    if (exchangeMetaData == null
+        || exchangeMetaData.getInstruments() == null
+        || instrument == null) {
+      return null;
+    }
+    InstrumentMetaData instrumentMetaData = exchangeMetaData.getInstruments().get(instrument);
+    return instrumentMetaData == null ? null : instrumentMetaData.getAmountStepSize();
+  }
+
+  private static BigDecimal requirePositiveOptionContractValue(
+      BigDecimal contractValue, String instrumentId) {
+    if (contractValue == null || contractValue.signum() <= 0) {
+      throw new IllegalArgumentException(
+          "OKX option " + instrumentId + " requires a positive contract value");
+    }
+    return contractValue;
+  }
+
+  private static BigDecimal parseOptionContractValue(String value, String instrumentId) {
+    if (value == null) {
+      return null;
+    }
+    try {
+      return new BigDecimal(value);
+    } catch (NumberFormatException exception) {
+      throw new IllegalArgumentException(
+          "Invalid OKX option ctVal '" + value + "' for instrument " + instrumentId,
+          exception);
+    }
+  }
+
+  private static BigDecimal signedValue(BigDecimal value, OpenPosition.Type type) {
+    if (value == null) {
+      return null;
+    }
+    BigDecimal absoluteValue = value.abs();
+    return type == OpenPosition.Type.SHORT ? absoluteValue.negate() : absoluteValue;
   }
 
   public static OpenPosition.Type adaptOpenPositionType(OkexPosition okexPosition) {

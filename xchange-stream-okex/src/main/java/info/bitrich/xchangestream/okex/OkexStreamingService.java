@@ -504,6 +504,9 @@ public class OkexStreamingService extends JsonNettyStreamingService {
       return new OkexSubscribeMessage.SubscriptionTopic(TRADES, null, null, channelName.replace(TRADES, ""));
     } else if (channelName.contains(TICKERS)) {
       return new OkexSubscribeMessage.SubscriptionTopic(TICKERS, null, null, channelName.replace(TICKERS, ""));
+    } else if (channelName.contains(USERFILLS)) {
+      return new OkexSubscribeMessage.SubscriptionTopic(
+          USERFILLS, OkexInstType.ANY, null, channelName.replace(USERFILLS, ""));
     } else if (channelName.contains(USERTRADES)) {
       return new OkexSubscribeMessage.SubscriptionTopic(USERTRADES, OkexInstType.ANY, null, channelName.replace(USERTRADES, ""));
     } else if (channelName.contains(FUNDING_RATE)) {

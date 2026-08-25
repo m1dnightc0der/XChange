@@ -1,15 +1,19 @@
 package org.knowm.xchange.okex;
 
+import static org.knowm.xchange.okex.OkexAdapters.FUTURES;
+import static org.knowm.xchange.okex.OkexAdapters.OPTION;
 import static org.knowm.xchange.okex.OkexAdapters.SPOT;
 import static org.knowm.xchange.okex.OkexAdapters.SWAP;
-import static org.knowm.xchange.okex.OkexAdapters.FUTURES;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import org.knowm.xchange.BaseExchange;
-import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.client.ResilienceRegistries;
 import org.knowm.xchange.okex.dto.account.OkexTradeFee;
@@ -31,6 +35,8 @@ public class OkexExchange extends BaseExchange {
   public static final String PARAM_AWS_HOST = "AWSHost";
   public static final String PARAM_SIMULATED = "simulated";
   public static final String PARAM_PASSPHRASE = "passphrase";
+  public static final String PARAM_ENABLED_OPTIONS_CHAINS = "enabledOptionsChains";
+  private static final Pattern OPTION_FAMILY_PATTERN = Pattern.compile("^[A-Z0-9]+-[A-Z0-9_]+$");
   private static ResilienceRegistries RESILIENCE_REGISTRIES;
 
   public String accountLevel = "1";
@@ -83,6 +89,7 @@ public class OkexExchange extends BaseExchange {
 
     exchangeSpecification.setExchangeSpecificParametersItem(PARAM_USE_AWS, false);
     exchangeSpecification.setExchangeSpecificParametersItem(PARAM_CONVERT_QUANTITIES, true);
+    exchangeSpecification.setExchangeSpecificParametersItem(PARAM_ENABLED_OPTIONS_CHAINS, null);
     exchangeSpecification.setExchangeSpecificParametersItem(
         PARAM_AWS_SSL_URI, "https://aws.okx.com");
     exchangeSpecification.setExchangeSpecificParametersItem(PARAM_AWS_HOST, "aws.okx.com");
@@ -106,6 +113,8 @@ public class OkexExchange extends BaseExchange {
 
   @Override
   public void remoteInit() throws IOException {
+    List<String> enabledOptionsChains = enabledOptionsChains();
+
     List<OkexInstrument> instruments =
         ((OkexMarketDataServiceRaw) marketDataService)
             .getOkexInstruments(SPOT, null, null)
@@ -124,6 +133,13 @@ public class OkexExchange extends BaseExchange {
             .getData();
 
     instruments.addAll(futures_instruments);
+
+    for (String optionFamily : enabledOptionsChains) {
+      instruments.addAll(
+          ((OkexMarketDataServiceRaw) marketDataService)
+              .getOkexInstruments(OPTION, optionFamily, null)
+              .getData());
+    }
 
     // Currency data and trade fee is only retrievable through a private endpoint
     List<OkexCurrency> currencies = null;
@@ -146,6 +162,41 @@ public class OkexExchange extends BaseExchange {
 
     exchangeMetaData = OkexAdapters.adaptToExchangeMetaData(instruments, currencies, tradeFee);
     instrumentCodeMap = OkexAdapters.buildInstrumentCodeMap(instruments);
+  }
+
+  private List<String> enabledOptionsChains() {
+    Object configuredValue =
+        exchangeSpecification.getExchangeSpecificParametersItem(PARAM_ENABLED_OPTIONS_CHAINS);
+    if (configuredValue == null
+        || configuredValue instanceof String && ((String) configuredValue).trim().isEmpty()) {
+      return Collections.emptyList();
+    }
+    if (!(configuredValue instanceof List<?>)) {
+      throw new IllegalArgumentException(
+          "Exchange-specific parameter '" + PARAM_ENABLED_OPTIONS_CHAINS + "' must be a List");
+    }
+
+    LinkedHashSet<String> optionFamilies = new LinkedHashSet<>();
+    for (Object configuredFamily : (List<?>) configuredValue) {
+      if (!(configuredFamily instanceof String)) {
+        throw invalidOptionFamily(configuredFamily);
+      }
+      String optionFamily = ((String) configuredFamily).trim();
+      if (!OPTION_FAMILY_PATTERN.matcher(optionFamily).matches()) {
+        throw invalidOptionFamily(configuredFamily);
+      }
+      optionFamilies.add(optionFamily);
+    }
+    return new ArrayList<>(optionFamilies);
+  }
+
+  private IllegalArgumentException invalidOptionFamily(Object configuredFamily) {
+    return new IllegalArgumentException(
+        "Invalid OKX option family '"
+            + configuredFamily
+            + "' in exchange-specific parameter '"
+            + PARAM_ENABLED_OPTIONS_CHAINS
+            + "'; expected ^[A-Z0-9]+-[A-Z0-9_]+$");
   }
 
   public Map<String, Integer> getInstrumentCodeMap() {

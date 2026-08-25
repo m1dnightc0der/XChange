@@ -62,6 +62,9 @@ public class OkexOrderDetails {
   @JsonProperty("fillTime")
   private String lastFilledTime;
 
+  @JsonProperty("ts")
+  private String timestamp;
+
   @JsonProperty("avgPx")
   private String averageFilledPrice;
 

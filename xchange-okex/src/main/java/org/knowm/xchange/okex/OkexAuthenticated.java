@@ -386,7 +386,7 @@ public interface OkexAuthenticated extends Okex {
       @HeaderParam("OK-ACCESS-TIMESTAMP") String timestamp,
       @HeaderParam("OK-ACCESS-PASSPHRASE") String passphrase,
       @HeaderParam("X-SIMULATED-TRADING") String simulatedTrading,
-      OkexCancelOrderRequest requestPayload)
+      List<OkexCancelOrderRequest> requestPayload)
       throws OkexException, IOException;
 
   @POST
