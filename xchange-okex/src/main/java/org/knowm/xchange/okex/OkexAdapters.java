@@ -18,6 +18,7 @@ import org.knowm.xchange.dto.meta.InstrumentMetaData;
 import org.knowm.xchange.dto.meta.WalletHealth;
 import org.knowm.xchange.dto.trade.*;
 import org.knowm.xchange.exceptions.ExchangeException;
+import org.knowm.xchange.exceptions.InstrumentNotValidException;
 import org.knowm.xchange.instrument.Instrument;
 import org.knowm.xchange.okex.dto.OkexException;
 import org.knowm.xchange.okex.dto.OkexInstType;
@@ -32,6 +33,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.ResolverStyle;
+import java.time.temporal.ChronoField;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -60,11 +64,18 @@ public class OkexAdapters {
   private static final Pattern NATIVE_ERROR_CODE =
       Pattern.compile("^([0-9]+)(?:_[0-9]+)?$");
   private static final Pattern XPERPETUAL_NATIVE_ID =
-      Pattern.compile("^([^-]+)-USD_UM_XPERP-([0-9]{6})$", Pattern.CASE_INSENSITIVE);
+      Pattern.compile(
+          "^([^-]+)-(USD|USDC|USDT)_UM_XPERP-([0-9]{6})$", Pattern.CASE_INSENSITIVE);
   private static final Pattern OKEX_OPTION_NATIVE_ID =
       Pattern.compile("^([A-Z0-9_]+)-([A-Z0-9_]+)-(\\d{6})-([0-9]+(?:\\.[0-9]+)?)-([CP])$");
   private static final Pattern XPERPETUAL_PROMPT =
       Pattern.compile("^UM_XPERP-([0-9]{6})$", Pattern.CASE_INSENSITIVE);
+  private static final DateTimeFormatter XPERPETUAL_DATE =
+      new DateTimeFormatterBuilder()
+          .appendValueReduced(ChronoField.YEAR, 2, 2, 2000)
+          .appendPattern("MMdd")
+          .toFormatter(Locale.ROOT)
+          .withResolverStyle(ResolverStyle.STRICT);
 
   /**
    * Canonical public error entry point for every OKX REST and WebSocket response.
@@ -556,8 +567,8 @@ return orderList;
     Matcher xperpetualMatcher = XPERPETUAL_NATIVE_ID.matcher(instrumentId);
     if (xperpetualMatcher.matches()) {
       return new FuturesContract(
-          new CurrencyPair(xperpetualMatcher.group(1), "USD"),
-          "UM_XPERP-" + xperpetualMatcher.group(2));
+          new CurrencyPair(xperpetualMatcher.group(1), xperpetualMatcher.group(2)),
+          "UM_XPERP-" + xperpetualMatcher.group(3));
     }
 
     Matcher optionMatcher = OKEX_OPTION_NATIVE_ID.matcher(instrumentId);
@@ -589,7 +600,9 @@ return orderList;
       Matcher xperpetualMatcher = XPERPETUAL_PROMPT.matcher(futuresContract.getPrompt());
       if (xperpetualMatcher.matches()) {
         return futuresContract.getBase().getCurrencyCode()
-            + "-USD_UM_XPERP-"
+            + "-"
+            + futuresContract.getCounter().getCurrencyCode()
+            + "_UM_XPERP-"
             + xperpetualMatcher.group(1);
       }
     }
@@ -606,20 +619,24 @@ return orderList;
     }
 
     String requestedBase = requestedInstrument.getBase().getCurrencyCode();
+    String requestedQuote = requestedInstrument.getCounter().getCurrencyCode();
     return exchangeMetaData.getInstruments().keySet().stream()
         .filter(FuturesContract.class::isInstance)
         .map(FuturesContract.class::cast)
         .filter(
             candidate ->
                 requestedBase.equalsIgnoreCase(candidate.getBase().getCurrencyCode()))
-        .filter(candidate -> "USD".equalsIgnoreCase(candidate.getCounter().getCurrencyCode()))
+        .filter(
+            candidate ->
+                requestedQuote.equalsIgnoreCase(candidate.getCounter().getCurrencyCode()))
         .filter(candidate -> XPERPETUAL_PROMPT.matcher(candidate.getPrompt()).matches())
         .filter(candidate -> xperpetualExpiry(candidate).isAfter(now))
         .min(Comparator.comparing(OkexAdapters::xperpetualExpiry))
         .orElseThrow(
             () ->
-                new IllegalArgumentException(
-                    "No live XPerpetual metadata for " + requestedInstrument));
+                new InstrumentNotValidException(
+                    "No live XPerpetual metadata for " + requestedInstrument,
+                    requestedInstrument));
   }
 
   private static Instant xperpetualExpiry(FuturesContract instrument) {
@@ -628,7 +645,7 @@ return orderList;
       throw new IllegalArgumentException(
           "Invalid XPerpetual metadata prompt: " + instrument.getPrompt());
     }
-    return LocalDate.parse(matcher.group(1), DateTimeFormatter.ofPattern("yyMMdd"))
+    return LocalDate.parse(matcher.group(1), XPERPETUAL_DATE)
         .atTime(8, 0)
         .toInstant(ZoneOffset.UTC);
   }
