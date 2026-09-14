@@ -242,7 +242,7 @@ public class BinanceTradeService extends BinanceTradeServiceRaw implements Trade
       }
       return orderId;
     } catch (BinanceException e) {
-      throw BinanceErrorAdapter.adapt(e);
+      throw BinanceErrorAdapter.adaptOrderPlacement(e);
     }
   }
 

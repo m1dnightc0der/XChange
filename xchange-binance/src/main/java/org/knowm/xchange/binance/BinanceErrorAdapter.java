@@ -35,7 +35,7 @@ public final class BinanceErrorAdapter {
       set(
           -1013, -1014, -1023, -1100, -1101, -1102, -1103, -1104, -1105, -1106,
           -1111, -1113, -1114, -1115, -1116, -1117, -1118, -1119, -1120, -1127,
-          -1128, -1130, -1136, -2010, -2013, -2020, -2021, -2022, -2025, -2026,
+          -1128, -1130, -1136, -2013, -2020, -2021, -2022, -2025, -2026,
           -4000, -4001, -4002, -4003, -4005, -4006, -4007, -4008, -4009, -4010,
           -4011, -4012, -4013, -4014, -4015, -4016, -4017, -4018, -4019, -4020,
           -4021, -4023, -4024, -4025, -4026, -4028, -4029, -4030, -4031, -4032,
@@ -90,13 +90,14 @@ public final class BinanceErrorAdapter {
     if (code == -1021) {
       return new OperationTimeoutException(canonicalMessage, exception);
     }
-    if (code == -1010 || code == -2010 || code == -2011) {
-      if (normalized.contains("insufficient balance")) {
-        return new FundsExceededException(canonicalMessage, exception);
-      }
-      if (code == -2011 && normalized.startsWith("unknown order sent")) {
-        return new OrderNotValidException(canonicalMessage, exception);
-      }
+    if ((code == -1010 || code == -2010 || code == -2011)
+        && normalized.contains("insufficient balance")) {
+      return new FundsExceededException(canonicalMessage, exception);
+    }
+    if (code == -2011 && normalized.startsWith("unknown order sent")) {
+      return new OrderNotValidException(canonicalMessage, exception);
+    }
+    if (code == -1010 || code == -2011) {
       return new ExchangeException(canonicalMessage, exception);
     }
 
@@ -146,6 +147,16 @@ public final class BinanceErrorAdapter {
       return new OrderNotValidException(canonicalMessage, exception);
     }
     return new ExchangeException(canonicalMessage, exception);
+  }
+
+  public static ExchangeException adaptOrderPlacement(BinanceException exception) {
+    ExchangeException adapted = adapt(exception);
+    if (exception != null
+        && exception.getCode() == -2010
+        && adapted.getClass() == ExchangeException.class) {
+      return new OrderNotValidException(adapted.getMessage(), exception);
+    }
+    return adapted;
   }
 
   private static boolean isMinimumNotionalMessage(String normalizedMessage) {

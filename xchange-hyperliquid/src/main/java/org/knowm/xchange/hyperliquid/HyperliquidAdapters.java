@@ -18,6 +18,7 @@ import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidAllMids;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidCandleSnapshot;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidL2Book;
 import org.knowm.xchange.hyperliquid.dto.marketdata.HyperliquidTrade;
+import org.knowm.xchange.hyperliquid.dto.trade.PlaceOrderResponse;
 import org.knowm.xchange.hyperliquid.dto.trade.Side;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.NonceException;
@@ -332,6 +333,48 @@ public class HyperliquidAdapters {
         }
 
         return action;
+    }
+
+    /**
+     * Match a batch order response to the members of the submitted order action.
+     *
+     * <p>A whole-payload error applies to every member. Per-order statuses are positional; absent
+     * response entries deliberately remain {@code null} because their outcome is unresolved.
+     */
+    public static List<ExchangeException> adaptBatchOrderErrors(
+            Map<String, Object> orderAction, PlaceOrderResponse response) {
+        Object rawOrders = orderAction == null ? null : orderAction.get("orders");
+        int orderCount = rawOrders instanceof List ? ((List<?>) rawOrders).size() : 0;
+        List<ExchangeException> errors = new ArrayList<>(Collections.nCopies(orderCount, null));
+
+        if (response == null) {
+            return errors;
+        }
+
+        String payloadError = response.getErrorMessage();
+        if (payloadError != null && !payloadError.trim().isEmpty()) {
+            for (int i = 0; i < orderCount; i++) {
+                errors.set(i, adaptError("Order placement failed: ", payloadError));
+            }
+            return errors;
+        }
+
+        PlaceOrderResponse.OrderResponseData responseData = response.getOrderResponseData();
+        List<PlaceOrderResponse.OrderStatus> statuses =
+                responseData == null || responseData.getData() == null
+                        ? null
+                        : responseData.getData().getStatuses();
+        if (statuses == null) {
+            return errors;
+        }
+
+        for (int i = 0; i < Math.min(orderCount, statuses.size()); i++) {
+            PlaceOrderResponse.OrderStatus status = statuses.get(i);
+            if (status != null && status.getError() != null && !status.getError().trim().isEmpty()) {
+                errors.set(i, adaptError("Order placement failed: ", status.getError()));
+            }
+        }
+        return errors;
     }
 
     /**

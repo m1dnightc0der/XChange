@@ -35,7 +35,7 @@ public class AccountServiceTest {
     Throwable exception = catchThrowable(() -> withdraw("withdraw-400.json", 400));
     assertThat(exception)
         .isInstanceOf(ExchangeSecurityException.class)
-        .hasMessage("error message (HTTP status code: 400)");
+        .hasMessage("Binance error -1002: error message");
   }
 
   private String withdraw(String responseFileName, int statusCode) throws IOException {

@@ -86,8 +86,12 @@ public final class OkexErrorAdapter {
       case 50013:
       case 50026:
       case 50061:
+      case 51011:
+      case 51016:
+      case 51054:
       case 51113:
       case 51115:
+      case 51149:
       case 51412:
       case 52000:
       case 60014:

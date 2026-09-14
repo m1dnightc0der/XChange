@@ -16,7 +16,11 @@ import org.knowm.xchange.binance.dto.BinanceException;
 import org.knowm.xchange.exceptions.ExchangeException;
 import org.knowm.xchange.exceptions.ExchangeSecurityException;
 import org.knowm.xchange.exceptions.FundsExceededException;
+import org.knowm.xchange.exceptions.MarketSuspendedException;
+import org.knowm.xchange.exceptions.NonceException;
 import org.knowm.xchange.exceptions.OperationTimeoutException;
+import org.knowm.xchange.exceptions.OrderNotValidException;
+import org.knowm.xchange.exceptions.SystemOverloadException;
 
 public class BinanceErrorAdapterTest {
 
@@ -44,7 +48,10 @@ public class BinanceErrorAdapterTest {
       String rawMessage = rawMessage(row[1], row[2]);
       BinanceException source = new BinanceException(code, rawMessage);
 
-      ExchangeException adapted = BinanceErrorAdapter.adapt(source);
+      ExchangeException adapted =
+          code == -2010
+              ? BinanceErrorAdapter.adaptOrderPlacement(source)
+              : BinanceErrorAdapter.adapt(source);
 
       Class<?> expected = Class.forName("org.knowm.xchange.exceptions." + row[3]);
       assertThat(adapted.getClass())
@@ -79,8 +86,82 @@ public class BinanceErrorAdapterTest {
           .as("legacy insufficient-balance mapping for %s", code)
           .isExactlyInstanceOf(FundsExceededException.class);
     }
+  }
+
+  @Test
+  public void newOrderRejectedIsOrderNotValidOnlyInPlacementContext() {
     assertThat(BinanceErrorAdapter.adapt(new BinanceException(-2010, "NEW_ORDER_REJECTED")))
         .isExactlyInstanceOf(ExchangeException.class);
+    assertThat(
+            BinanceErrorAdapter.adaptOrderPlacement(
+                new BinanceException(-2010, "NEW_ORDER_REJECTED")))
+        .isExactlyInstanceOf(OrderNotValidException.class);
+    assertThat(
+            BinanceErrorAdapter.adaptOrderPlacement(
+                new BinanceException(-2010, "insufficient balance")))
+        .isExactlyInstanceOf(FundsExceededException.class);
+  }
+
+  @Test
+  public void wrongMarketStatusRemainsMarketSuspendedForPlacementTerminalization() {
+    assertThat(BinanceErrorAdapter.adapt(new BinanceException(-4022, "WRONG_MARKET_STATUS")))
+        .isExactlyInstanceOf(MarketSuspendedException.class);
+  }
+
+  @Test
+  public void lookupOnlyCancelAndMissingOrderCodesRemainIdentifiable() {
+    BinanceException cancelRejected = new BinanceException(-2011, "CANCEL_REJECTED");
+    BinanceException noSuchOrder = new BinanceException(-2013, "NO_SUCH_ORDER");
+
+    assertThat(BinanceErrorAdapter.adapt(cancelRejected))
+        .isExactlyInstanceOf(ExchangeException.class)
+        .hasCause(cancelRejected)
+        .hasMessageContaining("-2011");
+    assertThat(BinanceErrorAdapter.adapt(noSuchOrder))
+        .isExactlyInstanceOf(OrderNotValidException.class)
+        .hasCause(noSuchOrder)
+        .hasMessageContaining("-2013");
+  }
+
+  @Test
+  public void priceClientIdAndQuantityFiltersRemainOrderNotValid() {
+    for (int code : new int[] {-4014, -4015, -4023}) {
+      assertThat(BinanceErrorAdapter.adapt(new BinanceException(code, "filter rejection")))
+          .as("filter code %s", code)
+          .isExactlyInstanceOf(OrderNotValidException.class);
+    }
+  }
+
+  @Test
+  public void fokGtxAndMeRecvWindowRetainTypedMappingsIncludingPostOnlyGtxSignal() {
+    for (int code : new int[] {-5021, -5022}) {
+      assertThat(BinanceErrorAdapter.adapt(new BinanceException(code, "order rejection")))
+          .as("execution code %s", code)
+          .isExactlyInstanceOf(OrderNotValidException.class);
+    }
+    assertThat(BinanceErrorAdapter.adapt(new BinanceException(-5028, "ME_RECVWINDOW_REJECT")))
+        .isExactlyInstanceOf(NonceException.class);
+  }
+
+  @Test
+  public void officialEndpointEvidenceGapLeavesMinus4000AndMinus1008MappingsUnchanged() {
+    // -4000 audit note: the official USD-M code page was inaccessible during this audit, so its
+    // endpoint semantics are unverified and no runtime mapping change is made. Manifest provenance:
+    // usdm-futures-error-mapping.csv, source_last_modified=2026-08-14, source_url=
+    // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/error-code.
+    // Accessible official general info:
+    // https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info.
+    assertThat(BinanceErrorAdapter.adapt(new BinanceException(-4000, "INVALID_ORDER_STATUS")))
+        .isExactlyInstanceOf(OrderNotValidException.class);
+
+    // -1008 audit note: the official USD-M code page was inaccessible during this audit, so its
+    // endpoint semantics are unverified and no runtime mapping change is made. Manifest provenance:
+    // usdm-futures-error-mapping.csv, source_last_modified=2026-08-14, source_url=
+    // https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/error-code.
+    // Accessible official general info:
+    // https://developers.binance.com/docs/derivatives/usds-margined-futures/general-info.
+    assertThat(BinanceErrorAdapter.adapt(new BinanceException(-1008, "Request throttled")))
+        .isExactlyInstanceOf(SystemOverloadException.class);
   }
 
   @Test
