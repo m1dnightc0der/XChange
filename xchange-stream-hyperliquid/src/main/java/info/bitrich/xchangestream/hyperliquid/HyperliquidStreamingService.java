@@ -26,6 +26,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
     private static final Logger LOG = LoggerFactory.getLogger(HyperliquidStreamingService.class);
     public boolean isLoggedIn = false;
     private static final String SUBSCRIBE = "subscribe";
+    private static final int MAX_FRAME_PAYLOAD_LENGTH = 1024 * 1024;
 
     private static final String PING = "ping";
     private static final String UNSUBSCRIBE = "unsubscribe";
@@ -42,7 +43,7 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
     private final AtomicLong connectGeneration = new AtomicLong();
 
     public HyperliquidStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
-        super(apiUrl);
+        super(apiUrl, MAX_FRAME_PAYLOAD_LENGTH);
         this.exchangeSpecification = exchangeSpecification;
     }
     public void pingPongDisconnectIfConnected() {

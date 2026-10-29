@@ -30,6 +30,7 @@ import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.core.ObservableEmitter;
+import io.reactivex.rxjava3.disposables.SerialDisposable;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import io.reactivex.rxjava3.subjects.Subject;
 import org.slf4j.Logger;
@@ -38,17 +39,20 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.channels.ClosedChannelException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -136,13 +140,18 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     private final int maxFramePayloadLength;
     protected URI uri;
     private final AtomicBoolean isManualDisconnect = new AtomicBoolean();
-    private Channel webSocketChannel;
+    private volatile Channel webSocketChannel;
+    private final Object reconnectLock = new Object();
+    private CompletableFuture<Void> reconnectFuture;
+    private ScheduledFuture<?> reconnectTask;
+    private SerialDisposable reconnectSubscription;
+    private long connectionGeneration;
     private final Duration retryDuration;
     private final Duration connectionTimeout;
     private final int idleTimeoutSeconds;
     private volatile NioEventLoopGroup eventLoopGroup;
     protected final Map<String, Subscription> channels = new ConcurrentHashMap<>();
-    Instant retry = null;
+    volatile Instant retry = null;
 
     protected final Map<String, ObservableEmitter<T>> singles = new ConcurrentHashMap<>();
     private boolean compressedMessages = false;
@@ -157,7 +166,7 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     // debugging
     private boolean acceptAllCertificates = false;
     private boolean enableLoggingHandler = false;
-    private boolean autoReconnect = true;
+    private volatile boolean autoReconnect = true;
     private LogLevel loggingHandlerLevel = LogLevel.DEBUG;
     private String socksProxyHost;
     private Integer socksProxyPort;
@@ -197,269 +206,240 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
 
     @Override
     protected Completable openConnection() {
-        return Completable.create(
-                        completable -> {
-                            try {
-                                LOG.info("Connecting to {}", uri.toString());
-
-                                String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-
-                                String host = uri.getHost();
-                                if (host == null) {
-                                    throw new IllegalArgumentException("Host cannot be null.");
-                                }
-
-                                final int port;
-                                if (uri.getPort() == -1) {
-                                    if ("ws".equalsIgnoreCase(scheme)) {
-                                        port = 80;
-                                    } else if ("wss".equalsIgnoreCase(scheme)) {
-                                        port = 443;
-                                    } else {
-                                        port = -1;
+        return Completable.defer(() -> {
+            final long generation;
+            final boolean recovering;
+            synchronized (reconnectLock) {
+                // Retry admission is fenced under this same lock. Only a new, subscribed
+                // connection can reset manual suppression; old timers cannot get here.
+                isManualDisconnect.set(false);
+                generation = ++connectionGeneration;
+                recovering = reconnectFuture != null && !reconnectFuture.isDone();
+                if (eventLoopGroup == null || eventLoopGroup.isShuttingDown()) {
+                    eventLoopGroup = new NioEventLoopGroup(3);
+                }
+            }
+            return Completable.create(completable -> {
+                synchronized (reconnectLock) {
+                    if (isManualDisconnect.get() || generation != connectionGeneration) {
+                        completable.tryOnError(new CancellationException("Connection cancelled"));
+                        return;
+                    }
+                    LOG.info("Connecting to {}", uri.toString());
+                    String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+                    String host = uri.getHost();
+                    if (host == null) {
+                        throw new IllegalArgumentException("Host cannot be null.");
+                    }
+                    if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+                        throw new IllegalArgumentException("Only WS(S) is supported.");
+                    }
+                    final boolean ssl = "wss".equalsIgnoreCase(scheme);
+                    final int port = uri.getPort() == -1 ? (ssl ? 443 : 80) : uri.getPort();
+                    final SslContext sslCtx;
+                    if (ssl) {
+                        SslContextBuilder builder = SslContextBuilder.forClient();
+                        if (acceptAllCertificates) {
+                            builder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+                        }
+                        sslCtx = builder.build();
+                    } else {
+                        sslCtx = null;
+                    }
+                    final WebSocketClientHandler handler = getWebSocketClientHandler(
+                            WebSocketClientHandshakerFactory.newHandshaker(
+                                    uri, WebSocketVersion.V13, null, true,
+                                    getCustomHeaders(), maxFramePayloadLength),
+                            this::messageHandler);
+                    ChannelFuture transport = new Bootstrap()
+                            .group(eventLoopGroup)
+                            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
+                                    Math.toIntExact(connectionTimeout.toMillis()))
+                            .option(ChannelOption.SO_KEEPALIVE, true)
+                            .channel(NioSocketChannel.class)
+                            .handler(new ChannelInitializer<SocketChannel>() {
+                                @Override
+                                protected void initChannel(SocketChannel ch) {
+                                    ChannelPipeline p = ch.pipeline();
+                                    if (socksProxyHost != null) {
+                                        p.addLast(new Socks5ProxyHandler(
+                                                SocketUtils.socketAddress(socksProxyHost, socksProxyPort)));
                                     }
-                                } else {
-                                    port = uri.getPort();
-                                }
-
-                                if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-                                    throw new IllegalArgumentException("Only WS(S) is supported.");
-                                }
-
-                                final boolean ssl = "wss".equalsIgnoreCase(scheme);
-                                final SslContext sslCtx;
-                                if (ssl) {
-                                    SslContextBuilder sslContextBuilder = SslContextBuilder.forClient();
-                                    if (acceptAllCertificates) {
-                                        sslContextBuilder.trustManager(InsecureTrustManagerFactory.INSTANCE);
+                                    if (sslCtx != null) {
+                                        p.addLast(sslCtx.newHandler(ch.alloc(), host, port));
                                     }
-                                    sslCtx = sslContextBuilder.build();
-                                } else {
-                                    sslCtx = null;
+                                    p.addLast(new HttpClientCodec());
+                                    if (enableLoggingHandler) {
+                                        p.addLast(new LoggingHandler(loggingHandlerLevel));
+                                    }
+                                    if (compressedMessages) {
+                                        p.addLast(WebSocketClientCompressionHandler.INSTANCE);
+                                    }
+                                    p.addLast(new HttpObjectAggregator(8192));
+                                    if (idleTimeoutSeconds > 0) {
+                                        p.addLast(new IdleStateHandler(idleTimeoutSeconds, 0, 0));
+                                    }
+                                    WebSocketClientExtensionHandler extension = getWebSocketClientExtensionHandler();
+                                    if (extension != null) {
+                                        p.addLast(extension);
+                                    }
+                                    p.addLast(handler);
                                 }
-
-                                final WebSocketClientHandler handler =
-                                        getWebSocketClientHandler(
-                                                WebSocketClientHandshakerFactory.newHandshaker(
-                                                        uri,
-                                                        WebSocketVersion.V13,
-                                                        null,
-                                                        true,
-                                                        getCustomHeaders(),
-                                                        maxFramePayloadLength),
-                                                this::messageHandler);
-
-                                if (eventLoopGroup == null || eventLoopGroup.isShuttingDown()) {
-                                    eventLoopGroup = new NioEventLoopGroup(3);//one for trades, order books and orders
-                                }
-
-                                new Bootstrap()
-                                        .group(eventLoopGroup)
-                                        .option(
-                                                ChannelOption.CONNECT_TIMEOUT_MILLIS,
-                                                java.lang.Math.toIntExact(connectionTimeout.toMillis()))
-                                        .option(ChannelOption.SO_KEEPALIVE, true)
-                                        .channel(NioSocketChannel.class)
-                                        .handler(
-                                                new ChannelInitializer<SocketChannel>() {
-                                                    @Override
-                                                    protected void initChannel(SocketChannel ch) {
-                                                        ChannelPipeline p = ch.pipeline();
-                                                        if (socksProxyHost != null) {
-                                                            p.addLast(
-                                                                    new Socks5ProxyHandler(
-                                                                            SocketUtils.socketAddress(socksProxyHost, socksProxyPort)));
-                                                        }
-                                                        if (sslCtx != null) {
-                                                            p.addLast(sslCtx.newHandler(ch.alloc(), host, port));
-                                                        }
-                                                        p.addLast(new HttpClientCodec());
-                                                        if (enableLoggingHandler) {
-                                                            p.addLast(new LoggingHandler(loggingHandlerLevel));
-                                                        }
-                                                        if (compressedMessages) {
-                                                            p.addLast(WebSocketClientCompressionHandler.INSTANCE);
-                                                        }
-                                                        p.addLast(new HttpObjectAggregator(8192));
-                                                        if (idleTimeoutSeconds > 0) {
-                                                            p.addLast(new IdleStateHandler(idleTimeoutSeconds, 0, 0));
-                                                        }
-                                                        WebSocketClientExtensionHandler clientExtensionHandler =
-                                                                getWebSocketClientExtensionHandler();
-                                                        if (clientExtensionHandler != null) {
-                                                            p.addLast(clientExtensionHandler);
-                                                        }
-                                                        p.addLast(handler);
-                                                    }
-                                                })
-                                        .connect(uri.getHost(), port)
-                                        .addListener(
-                                                (ChannelFuture channelFuture) -> {
-                                                    webSocketChannel = channelFuture.channel();
-                                                    if (channelFuture.isSuccess()) {
-                                                        handler
-                                                                .handshakeFuture()
-                                                                .addListener(
-                                                                        handshakeFuture -> {
-                                                                            if (handshakeFuture.isSuccess()) {
-                                                                                connectionStateModel.setState(State.OPEN);
-                                                                                completable.onComplete();
-                                                                            } else {
-                                                                                webSocketChannel
-                                                                                        .disconnect()
-                                                                                        .addListener(
-                                                                                                x -> {
-                                                                                                    Thread.sleep(retryDuration.toMillis());
-                                                                                                    completable.onError(handshakeFuture.cause());
-                                                                                                });
-                                                                            }
-                                                                        });
-                                                    } else {
-                                                        connectionStateModel.setState(State.CLOSED);
-
-                                                        CompletableFuture<Void> reconnectFuture = scheduleReconnect();
-                                                        reconnectFuture.thenRun(() -> {
-                                                            if(!channels.isEmpty()) {
-                                                                try {
-                                                                    resubscribeChannels();
-                                                                    connectionStateModel.setState(State.OPEN);
-                                                                    connectionSuccessEmitters.onNext(new Object());
-                                                                } catch (IOException e) {
-                                                                    LOG.error("Failed to resubscribe channels after reconnection", e);
-                                                                    throw new RuntimeException(e);
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                });
-                            } catch (Exception throwable) {
-                                connectionStateModel.setState(State.CLOSED);
-                                completable.onError(throwable);
-
-                                CompletableFuture<Void> reconnectFuture = scheduleReconnect();
-                                reconnectFuture.thenRun(() -> {
-                                    if(!channels.isEmpty()) {
-                                        try {
-                                            resubscribeChannels();
+                            }).connect(host, port);
+                    final Channel attemptChannel = transport.channel();
+                    webSocketChannel = attemptChannel;
+                    // A peer can close before replying to the upgrade. Terminate that attempt too.
+                    attemptChannel.closeFuture().addListener(ignored ->
+                            completable.tryOnError(new ClosedChannelException()));
+                    transport.addListener((ChannelFuture connected) -> {
+                        synchronized (reconnectLock) {
+                            if (isManualDisconnect.get() || generation != connectionGeneration
+                                    || completable.isDisposed()) {
+                                attemptChannel.close();
+                                completable.tryOnError(new CancellationException("Connection cancelled"));
+                            } else if (!connected.isSuccess()) {
+                                completable.tryOnError(connected.cause());
+                                attemptChannel.close();
+                            } else {
+                                handler.handshakeFuture().addListener(handshake -> {
+                                    synchronized (reconnectLock) {
+                                        if (isManualDisconnect.get() || generation != connectionGeneration
+                                                || completable.isDisposed()) {
+                                            attemptChannel.close();
+                                            completable.tryOnError(new CancellationException("Connection cancelled"));
+                                        } else if (handshake.isSuccess()) {
                                             connectionStateModel.setState(State.OPEN);
-                                            connectionSuccessEmitters.onNext(new Object());
-                                        } catch (IOException e) {
-                                            LOG.error("Failed to resubscribe channels after reconnection", e);
-                                            throw new RuntimeException(e);
+                                            completable.onComplete();
+                                        } else {
+                                            completable.tryOnError(handshake.cause());
+                                            attemptChannel.close();
                                         }
                                     }
                                 });
                             }
-                        })
-                .doOnError(
-                        t -> {
-                            if (t instanceof WebSocketHandshakeException) {
-                                LOG.warn("Problem with connection: {} - {}", t.getClass(), t.getMessage());
-                            } else {
-                                LOG.warn("Problem with connection", t);
-                            }
-                            connectionStateModel.setState(State.CLOSED);
-                            reconnFailEmitters.onNext(t);
-
-                            CompletableFuture<Void> reconnectFuture = scheduleReconnect();
-                            reconnectFuture.thenRun(() -> {
-                                if(!channels.isEmpty()) {
-                                    try {
-                                        resubscribeChannels();
-                                        connectionStateModel.setState(State.OPEN);
-                                        connectionSuccessEmitters.onNext(new Object());
-                                    } catch (IOException e) {
-                                        LOG.error("Failed to resubscribe channels after reconnection", e);
-                                        throw new RuntimeException(e);
-                                    }
-                                }
-                            });
-                        })
-                .doOnComplete(
-                        () -> {
-                            if(!channels.isEmpty()) {
-                                resubscribeChannels();
-
-                                connectionStateModel.setState(State.OPEN);
-                                connectionSuccessEmitters.onNext(new Object());
-                            }
-                        });
+                        }
+                    });
+                }
+            }).doOnError(error -> {
+                synchronized (reconnectLock) {
+                    if (generation != connectionGeneration || isManualDisconnect.get()) {
+                        return;
+                    }
+                    connectionStateModel.setState(State.CLOSED);
+                    LOG.warn("Connection failed service={} role={} generation={} cause={}",
+                            getClass().getSimpleName(), connectionRole(), generation,
+                            error.getClass().getSimpleName());
+                    reconnFailEmitters.onNext(error);
+                    scheduleReconnect();
+                }
+            }).doOnComplete(() -> {
+                synchronized (reconnectLock) {
+                    // Automatic recovery must wait for the complete overridden connect()
+                    // chain (including exchange authentication hooks) before replaying.
+                    if (!recovering && generation == connectionGeneration
+                            && !isManualDisconnect.get() && !channels.isEmpty()) {
+                        resubscribeChannels();
+                        connectionSuccessEmitters.onNext(new Object());
+                    }
+                }
+            });
+        });
     }
 
     private CompletableFuture<Void> scheduleReconnect() {
-        CompletableFuture<Void> future = new CompletableFuture<>();
-
-        if (!autoReconnect) {
-            future.complete(null);
+        synchronized (reconnectLock) {
+            if (reconnectFuture != null && !reconnectFuture.isDone()) {
+                return reconnectFuture;
+            }
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            if (!autoReconnect || isManualDisconnect.get()) {
+                future.cancel(false);
+                return future;
+            }
+            reconnectFuture = future;
+            setRetryDelay(retryDuration);
+            scheduleReconnectWithRetry(future);
             return future;
         }
+    }
 
-        scheduleReconnectWithRetry(future);
-        return future;
+    private boolean canRetry(CompletableFuture<Void> future) {
+        if (future != reconnectFuture || future.isDone()) {
+            return false;
+        }
+        if (!autoReconnect || isManualDisconnect.get()
+                || eventLoopGroup == null || eventLoopGroup.isShuttingDown()) {
+            future.cancel(false);
+            return false;
+        }
+        return true;
     }
 
     private void scheduleReconnectWithRetry(CompletableFuture<Void> future) {
-        LOG.trace("Scheduling reconnection");
-
-        Instant retryLocal = this.retry;
-        if (retryLocal != null) {
-            LOG.trace("Waiting to reconnection before " + retryLocal);
-            Instant now = Instant.now();
-            while (retryLocal.isAfter(now)) {
-                try {
-                    Thread.sleep(retryDuration.toMillis()/2);
-                } catch (InterruptedException e) {
-                    future.completeExceptionally(e);
-                    return;
-                }
-                now = Instant.now();
+        synchronized (reconnectLock) {
+            if (!canRetry(future)) {
+                return;
             }
-            this.retry = null;
-        }
-
-        if (webSocketChannel == null || webSocketChannel.eventLoop().isShuttingDown()) {
-            LOG.warn("Cannot schedule reconnect: event loop unavailable or shutting down");
-            future.completeExceptionally(new IllegalStateException("Event loop unavailable"));
-            return;
-        }
-
-        webSocketChannel
-                .eventLoop()
-                .schedule(
-                        () -> {
-                            // Check if event loop is shutting down before attempting reconnect
-                            if (eventLoopGroup != null && eventLoopGroup.isShuttingDown()) {
-                                LOG.warn("Event loop is shutting down, aborting reconnection attempt");
-                                future.completeExceptionally(new IllegalStateException("Event loop shutting down"));
-                                return;
-                            }
-                            connect()
-                                    .subscribe(
-                                            () -> {
-                                                LOG.debug("Reconnection complete");
-                                                retry = Instant.now().plus(retryDuration);
-                                                future.complete(null);
-                                            },
-                                            e -> {
-                                                LOG.error("Reconnection failed: {}, will retry", e.getMessage());
-                                                retry = Instant.now().plus(retryDuration);
-
-                                                // Don't complete the future, just retry
-                                                if (!future.isDone()) {
-                                                    try {
-                                                        Thread.sleep(retryDuration.toMillis());
-                                                        scheduleReconnectWithRetry(future);
-                                                    } catch (InterruptedException ie) {
-                                                        future.completeExceptionally(ie);
-                                                    }
-                                                }
-                                            });
-                        },
-                        retryDuration.toMillis(),
-                        TimeUnit.MILLISECONDS);
-
-        if (retry == null) {
-            retry = Instant.now().plus(retryDuration);
+            long delay = retry == null ? retryDuration.toMillis()
+                    : Math.max(1, Duration.between(Instant.now(), retry).toMillis());
+            LOG.info("Reconnect scheduled service={} role={} generation={} nextRetryMs={}",
+                    getClass().getSimpleName(), connectionRole(), connectionGeneration, delay);
+            try {
+                reconnectTask = eventLoopGroup.next().schedule(() -> {
+                    synchronized (reconnectLock) {
+                        if (!canRetry(future)) {
+                            return;
+                        }
+                        if (retry != null && retry.isAfter(Instant.now())) {
+                            scheduleReconnectWithRetry(future);
+                            return;
+                        }
+                        retry = null;
+                        SerialDisposable attempt = new SerialDisposable();
+                        reconnectSubscription = attempt;
+                        attempt.set(Completable.defer(this::connect)
+                                .andThen(Completable.fromAction(() -> {
+                                    synchronized (reconnectLock) {
+                                        if (!canRetry(future) || !isSocketOpen()) {
+                                            throw new CancellationException("Recovery connection closed");
+                                        }
+                                        resubscribeChannels();
+                                        // A close can race an asynchronous exchange completion hook.
+                                        // Replay and owner completion are one critical section: an
+                                        // inactive callback must either join a retrying owner or start
+                                        // a new one, never join an owner about to falsely succeed.
+                                        if (!isSocketOpen()) {
+                                            throw new ClosedChannelException();
+                                        }
+                                        LOG.info("Resubscription complete service={} role={} generation={} channels={}",
+                                                getClass().getSimpleName(), connectionRole(),
+                                                connectionGeneration, channels.size());
+                                        connectionSuccessEmitters.onNext(new Object());
+                                        future.complete(null);
+                                    }
+                                }))
+                                .subscribe(() -> {}, error -> {
+                                    synchronized (reconnectLock) {
+                                        if (!canRetry(future)) {
+                                            return;
+                                        }
+                                        LOG.warn("Recovery failed service={} role={} generation={} cause={}",
+                                                getClass().getSimpleName(), connectionRole(),
+                                                connectionGeneration, error.getClass().getSimpleName());
+                                        if (webSocketChannel != null) {
+                                            webSocketChannel.close();
+                                        }
+                                        setRetryDelay(retryDuration);
+                                        scheduleReconnectWithRetry(future);
+                                    }
+                                }));
+                    }
+                }, delay, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException error) {
+                future.completeExceptionally(error);
+                LOG.warn("Reconnect scheduling rejected service={} role={} generation={}",
+                        getClass().getSimpleName(), connectionRole(), connectionGeneration);
+            }
         }
     }
 
@@ -477,6 +457,18 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
         }
     }
 
+    private String connectionRole() {
+        String path = uri.getPath();
+        if (path != null && path.endsWith("/public")) {
+            return "public";
+        }
+        if (path != null && path.endsWith("/private")) {
+            return "private";
+        }
+        // Shared endpoints (including HL) do not identify a role at this layer.
+        return "unknown";
+    }
+
     protected DefaultHttpHeaders getCustomHeaders() {
         return new DefaultHttpHeaders();
     }
@@ -486,8 +478,25 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
         channels.clear();
     }
 
+    // Called under reconnectLock, before shutting down or closing an in-flight attempt.
+    private void cancelReconnect() {
+        ++connectionGeneration;
+        if (reconnectTask != null) {
+            reconnectTask.cancel(false);
+        }
+        if (reconnectSubscription != null) {
+            reconnectSubscription.dispose();
+        }
+        if (reconnectFuture != null) {
+            reconnectFuture.cancel(false);
+        }
+    }
+
     public Completable disconnect() {
-        isManualDisconnect.set(true);
+        synchronized (reconnectLock) {
+            isManualDisconnect.set(true);
+            cancelReconnect();
+        }
         return Completable.create(
                 completable -> {
                     if (webSocketChannel != null && webSocketChannel.isOpen()) {
@@ -518,9 +527,16 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                                             completable.onComplete();
                                         });
                     } else {
-                        LOG.warn("Disconnect called but already disconnected");
+                        clearChannels();
                         connectionStateModel.setState(State.CLOSED);
-                        completable.onComplete();
+                        NioEventLoopGroup group = eventLoopGroup;
+                        if (group == null) {
+                            completable.onComplete();
+                        } else {
+                            // Setup can fail after allocating loops but before creating a channel.
+                            group.shutdownGracefully(0, idleTimeoutSeconds, TimeUnit.SECONDS)
+                                    .addListener(ignored -> completable.onComplete());
+                        }
                     }
                 });
     }
@@ -842,28 +858,14 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
-            if (isManualDisconnect.compareAndSet(true, false)) {
-                // Don't attempt to reconnect
-            } else {
-                super.channelInactive(ctx);
+            super.channelInactive(ctx);
+            synchronized (reconnectLock) {
+                if (isManualDisconnect.get() || ctx.channel() != webSocketChannel) {
+                    return;
+                }
+                connectionStateModel.setState(State.CLOSED);
                 disconnectEmitters.onNext(new Object());
-                LOG.trace("Reopening Websocket Client because it was closed! {}", ctx.channel());
-
-                CompletableFuture<Void> reconnectFuture = scheduleReconnect();
-
-                // Wait for reconnection to complete, then resubscribe
-                reconnectFuture.thenRun(() -> {
-                    if(!channels.isEmpty()) {
-                        try {
-                            resubscribeChannels();
-                            connectionStateModel.setState(State.OPEN);
-                            connectionSuccessEmitters.onNext(new Object());
-                        } catch (IOException e) {
-                            LOG.error("Failed to resubscribe channels after reconnection", e);
-                            throw new RuntimeException(e);
-                        }
-                    }
-                });
+                scheduleReconnect();
             }
         }
 
@@ -911,6 +913,15 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
     }
 
     public void setAutoReconnect(boolean autoReconnect) {
-        this.autoReconnect = autoReconnect;
+        synchronized (reconnectLock) {
+            this.autoReconnect = autoReconnect;
+            if (!autoReconnect && reconnectFuture != null && !reconnectFuture.isDone()) {
+                cancelReconnect();
+                connectionStateModel.setState(State.CLOSED);
+                if (webSocketChannel != null) {
+                    webSocketChannel.close();
+                }
+            }
+        }
     }
 }

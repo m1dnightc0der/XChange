@@ -12,7 +12,7 @@ import org.knowm.xchange.okex.OkexExchange;
 
 public class OkexStreamingExchange extends OkexExchange implements StreamingExchange {
   // Production URIs
-  public static final String WS_PUBLIC_URI="wss://ws.okx.com:8443";
+  public static final String WS_PUBLIC_URI = "wss://ws.okx.com:443";
   public static final String WS_PUBLIC_PATH = "/ws/v5/public";
   public static final String WS_PRIVATE_URI = "wss://ws.okx.com:8443";
   public static final String WS_PRIVATE_PATH = "/ws/v5/private";
