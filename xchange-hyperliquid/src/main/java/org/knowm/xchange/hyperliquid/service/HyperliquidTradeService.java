@@ -72,11 +72,13 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
     public String placeLimitOrder(LimitOrder limitOrder) throws IOException {
         // Extract parameters from XChange LimitOrder
         String coin = limitOrder.getInstrument().getBase().getCurrencyCode();
-        boolean isBuy = limitOrder.getType().equals(Order.OrderType.BID);
+        boolean isBuy = limitOrder.getType() == Order.OrderType.BID ||
+                        limitOrder.getType() == Order.OrderType.EXIT_ASK;
         double size = limitOrder.getOriginalAmount().doubleValue();
         double limitPrice = limitOrder.getLimitPrice().doubleValue();
         String userRef = limitOrder.getUserReference();
-        boolean reduceOnly = false; // Default to false
+        boolean reduceOnly = limitOrder.getType() == Order.OrderType.EXIT_BID ||
+                             limitOrder.getType() == Order.OrderType.EXIT_ASK;
 
         // Create order type structure (default to GTC limit order)
         java.util.Map<String, Object> limitType = new java.util.LinkedHashMap<>();
@@ -231,12 +233,19 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
     }
 
     private boolean cancelOrder(String orderId, String symbol) throws IOException {
+        return cancelOrder(orderId, symbol, false);
+    }
 
+    private boolean cancelOrder(String orderId, String symbol, boolean fast) throws IOException {
         HyperliquidResponse response;
         if (orderId.matches("\\d+")) {
-            response = cancelOrderRaw(symbol, orderId);
+            response = fast
+                    ? super.cancel(symbol, orderId, true, HyperliquidTradeParams.OrderKind.NON_TRIGGER)
+                    : cancelOrderRaw(symbol, orderId);
         } else {
-            response = cancelOrderByCloidRaw(symbol, orderId);
+            response = fast
+                    ? super.cancelByCloid(symbol, orderId, true, HyperliquidTradeParams.OrderKind.NON_TRIGGER)
+                    : cancelOrderByCloidRaw(symbol, orderId);
         }
         if (response == null) {
             throw new IOException("Order cancellation failed: no response received");
@@ -302,7 +311,7 @@ public class HyperliquidTradeService extends HyperliquidTradeServiceRaw implemen
             HyperliquidTradeParams.HyperliquidCancelOrderParams hyperliquidCancelOrderParams = (HyperliquidTradeParams.HyperliquidCancelOrderParams) params;
             String id = ((CancelOrderByIdParams) params).getOrderId();
             String instrumentId = hyperliquidCancelOrderParams.getInstrument().getBase().toString();
-            return cancelOrder(id, instrumentId);
+            return cancelOrder(id, instrumentId, hyperliquidCancelOrderParams.isFast());
         } else if (params instanceof CancelOrderByIdParams && params instanceof CancelOrderByInstrument) {
 
             String id = ((CancelOrderByIdParams) params).getOrderId();

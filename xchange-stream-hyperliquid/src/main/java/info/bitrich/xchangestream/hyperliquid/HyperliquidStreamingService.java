@@ -18,6 +18,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -41,6 +43,10 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
     private WebSocketClientHandler.WebSocketMessageHandler channelInactiveHandler = null;
     private final ExchangeSpecification exchangeSpecification;
     private final AtomicLong connectGeneration = new AtomicLong();
+
+    // Incoming books identify only type/coin, so a mode is fixed for this service's lifetime.
+    private final Map<String, Boolean> orderBookModes = new ConcurrentHashMap<>();
+    private final Map<String, Observable<JsonNode>> orderBookChannels = new ConcurrentHashMap<>();
 
     public HyperliquidStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
         super(apiUrl, MAX_FRAME_PAYLOAD_LENGTH);
@@ -185,6 +191,44 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
     }
 
     @Override
+    public Observable<JsonNode> subscribeChannel(String channelName, Object... args) {
+        if (!channelName.startsWith(L2BOOK + ".")) {
+            return super.subscribeChannel(channelName, args);
+        }
+
+        // Copy caller-owned arguments: reconnect and disposal must retain the selected mode.
+        Object[] subscriptionArgs = args == null ? new Object[0] : args.clone();
+        boolean fast = Boolean.TRUE.equals(getFastBookOption(subscriptionArgs));
+        Boolean previousMode = orderBookModes.putIfAbsent(channelName, fast);
+        if (previousMode != null && previousMode.booleanValue() != fast) {
+            throw new IllegalArgumentException("Conflicting L2Book mode for " + channelName
+                    + "; use a new streaming service to change mode");
+        }
+
+        // Reuse Netty's shared observable across callers/wrappers, not just its channel ID.
+        // Keep it after disposal so mode identity remains sticky and same-mode reuse works.
+        return orderBookChannels.computeIfAbsent(channelName,
+                channel -> super.subscribeChannel(channel, subscriptionArgs));
+    }
+
+    @Override
+    public String getSubscriptionUniqueId(String channelName, Object... args) {
+        // L2 wire messages route by type/coin only; options must not suffix that identity.
+        return channelName.startsWith(L2BOOK + ".")
+                ? channelName : super.getSubscriptionUniqueId(channelName, args);
+    }
+
+    private static Boolean getFastBookOption(Object... args) {
+        if (args == null || args.length < 2) {
+            return null;
+        }
+        if (!(args[1] instanceof Boolean)) {
+            throw new IllegalArgumentException("L2Book fast option at argument index 1 must be a Boolean");
+        }
+        return (Boolean) args[1];
+    }
+
+    @Override
     public String getSubscribeMessage(String channelName, Object... args) throws IOException {
         String[] parts = channelName.split("\\.");
         if (parts.length < 2) {
@@ -201,6 +245,10 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier, true);
         } else {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier);
+        }
+
+        if (L2BOOK.equals(type)) {
+            subscription.setFast(getFastBookOption(args));
         }
 
         HyperliquidSubscribeMessage message = new HyperliquidSubscribeMessage(SUBSCRIBE, subscription);
@@ -232,6 +280,10 @@ public class HyperliquidStreamingService extends JsonNettyStreamingService {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier, true);
         } else {
             subscription = new HyperliquidSubscribeMessage.Subscription(type, identifier);
+        }
+
+        if (L2BOOK.equals(type)) {
+            subscription.setFast(getFastBookOption(args));
         }
 
         HyperliquidSubscribeMessage message = new HyperliquidSubscribeMessage(UNSUBSCRIBE, subscription);

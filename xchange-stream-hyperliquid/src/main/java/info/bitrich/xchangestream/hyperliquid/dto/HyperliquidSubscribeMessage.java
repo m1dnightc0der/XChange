@@ -1,5 +1,6 @@
 package info.bitrich.xchangestream.hyperliquid.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class HyperliquidSubscribeMessage {
@@ -42,6 +43,10 @@ public class HyperliquidSubscribeMessage {
 
         @JsonProperty("user")
         private String user;
+
+        @JsonProperty("fast")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private Boolean fast;
 
         public Subscription() {}
 
@@ -90,6 +95,14 @@ public class HyperliquidSubscribeMessage {
 
         public void setUser(String user) {
             this.user = user;
+        }
+
+        public Boolean getFast() {
+            return fast;
+        }
+
+        public void setFast(Boolean fast) {
+            this.fast = fast;
         }
     }
 }

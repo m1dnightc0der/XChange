@@ -70,7 +70,7 @@ public class HyperliquidStreamingMarketDataService implements StreamingMarketDat
         String channelName = L2BOOK + "." + coin;
 
         return service
-                .subscribeChannel(channelName)
+                .subscribeChannel(channelName, args)
                 .filter(message -> message.has("data"))
                 .filter(message -> message.has("channel") && message.get("channel").asText().equals(L2BOOK))
                 .flatMap(jsonNode -> {

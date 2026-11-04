@@ -10,6 +10,7 @@ import org.knowm.xchange.hyperliquid.dto.Response;
 import org.knowm.xchange.hyperliquid.dto.account.HyperliquidClearinghouseState;
 import org.knowm.xchange.hyperliquid.dto.trade.Fill;
 import org.knowm.xchange.hyperliquid.dto.trade.Order;
+import org.knowm.xchange.hyperliquid.dto.trade.HyperliquidTradeParams.OrderKind;
 
 import java.io.IOException;
 import java.util.*;
@@ -144,36 +145,40 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
 
 
     public HyperliquidResponse cancelByCloid(String name, String cloid) throws IOException {
-        // Create cancel wire in Hyperliquid format with short field names
-        // Matches Python SDK bulk_cancel structure (lines 277-283)
-        Map<String, Object> cancelWire = new LinkedHashMap<>();
-        cancelWire.put("asset", getAssetIndex(name));  // asset index
-        cancelWire.put("cloid", cloid);              // order ID
-
-        // Create action wrapper
-        Map<String, Object> action = new LinkedHashMap<>();
-        action.put("type", "cancelByCloid");
-        action.put("cancels", java.util.Arrays.asList(cancelWire));
-
-        Map<String, Object> requestBody =
-                hyperliquidAuth.createSignedActionRequest(action, null);
-        return sendCancel(requestBody);
+        return cancelByCloid(name, cloid, false, OrderKind.UNKNOWN);
     }
+
+    public HyperliquidResponse cancelByCloid(
+            String name, String cloid, boolean fastRequested, OrderKind orderKind) throws IOException {
+        Map<String, Object> action = createCancelAction(
+                getAssetIndex(name), cloid, true, fastRequested, orderKind);
+        return sendCancel(hyperliquidAuth.createSignedActionRequest(action, null));
+    }
+
     public HyperliquidResponse cancel(String name, String orderId) throws IOException {
-        // Create cancel wire in Hyperliquid format with short field names
-        // Matches Python SDK bulk_cancel structure (lines 277-283)
+        return cancel(name, orderId, false, OrderKind.UNKNOWN);
+    }
+
+    public HyperliquidResponse cancel(
+            String name, String orderId, boolean fastRequested, OrderKind orderKind) throws IOException {
+        Map<String, Object> action = createCancelAction(
+                getAssetIndex(name), orderId, false, fastRequested, orderKind);
+        return sendCancel(hyperliquidAuth.createSignedActionRequest(action, null));
+    }
+
+    /** Canonical single-cancel action shared by HTTP and WS; complete it before signing. */
+    public static Map<String, Object> createCancelAction(
+            int asset, String orderId, boolean byCloid, boolean fastRequested, OrderKind orderKind) {
         Map<String, Object> cancelWire = new LinkedHashMap<>();
-        cancelWire.put("a", getAssetIndex(name));  // asset index
-        cancelWire.put("o", Long.valueOf(orderId));              // order ID
-
-        // Create action wrapper
+        cancelWire.put(byCloid ? "asset" : "a", asset);
+        cancelWire.put(byCloid ? "cloid" : "o", byCloid ? orderId : Long.valueOf(orderId));
         Map<String, Object> action = new LinkedHashMap<>();
-        action.put("type", "cancel");
-        action.put("cancels", java.util.Arrays.asList(cancelWire));
-
-        Map<String, Object> requestBody =
-                hyperliquidAuth.createSignedActionRequest(action, null);
-        return sendCancel(requestBody);
+        action.put("type", byCloid ? "cancelByCloid" : "cancel");
+        action.put("cancels", Collections.singletonList(cancelWire));
+        if (fastRequested && orderKind == OrderKind.NON_TRIGGER) {
+            action.put("f", true);
+        }
+        return action;
     }
     /**
      * Get user account state
@@ -299,30 +304,8 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
             boolean reduceOnly,
             Cloid cloid) throws IOException {
 
-        // Create order wire for the new order parameters
-        Map<String, Object> orderWire = org.knowm.xchange.hyperliquid.HyperliquidAdapters.createOrderWire(
-                getAssetIndex(name),
-                isBuy,
-                limitPx,
-                sz,
-                reduceOnly,
-                orderType,
-                cloid
-        );
-
-        // Create modify wire structure
-        // Matches Python: {"oid": orderId, "order": orderWire}
-       // Map<String, Object> modifyWire = new LinkedHashMap<>();
-       // modifyWire.put("oid", orderId);
-       // modifyWire.put("order", orderWire);
-
-        // Create batchModify action
-        // Matches Python SDK bulk_modify_orders_new (lines 183-196)
-        Map<String, Object> action = new LinkedHashMap<>();
-        action.put("type", "modify");
-        action.put("oid", ((orderId instanceof Cloid) ?   ((Cloid) orderId).toRaw() : orderId));
-        action.put("order", orderWire);
-        //action.put(java.util.Arrays.asList(modifyWire));
+        Map<String, Object> action = createModifyAction(
+                orderId, getAssetIndex(name), isBuy, sz, limitPx, orderType, reduceOnly, cloid);
 
         Map<String, Object> requestBody =
                 hyperliquidAuth.createSignedActionRequest(action, null);
@@ -331,6 +314,19 @@ public class HyperliquidTradeServiceRaw extends HyperliquidBaseService {
         // Convert raw response to typed PlaceOrderResponse
         com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         return mapper.convertValue(rawResponse, org.knowm.xchange.hyperliquid.dto.trade.PlaceOrderResponse.class);
+    }
+
+    /** Canonical single-modify action shared by HTTP and WS; preserves supplied protections. */
+    public static Map<String, Object> createModifyAction(
+            Object orderId, int asset, boolean isBuy, double sz, double limitPx,
+            Map<String, Object> orderType, boolean reduceOnly, Cloid cloid) {
+        Map<String, Object> orderWire = HyperliquidAdapters.createOrderWire(
+                asset, isBuy, limitPx, sz, reduceOnly, orderType, cloid);
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "modify");
+        action.put("oid", orderId instanceof Cloid ? ((Cloid) orderId).toRaw() : orderId);
+        action.put("order", orderWire);
+        return action;
     }
 
     /**

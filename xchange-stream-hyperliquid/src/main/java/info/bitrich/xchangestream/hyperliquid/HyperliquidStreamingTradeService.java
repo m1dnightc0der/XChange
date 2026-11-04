@@ -5,6 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import info.bitrich.xchangestream.core.StreamingTradeService;
 import info.bitrich.xchangestream.hyperliquid.dto.HyperliquidPostMessage;
 import info.bitrich.xchangestream.service.netty.StreamingObjectMapperHelper;
+import info.bitrich.xchangestream.service.exception.NotConnectedException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import org.knowm.xchange.hyperliquid.dto.HyperliquidResponse;
+import org.knowm.xchange.hyperliquid.dto.trade.HyperliquidTradeParams.HyperliquidCancelOrderParams;
+import org.knowm.xchange.hyperliquid.dto.trade.PlaceOrderResponse;
+import org.knowm.xchange.hyperliquid.service.HyperliquidTradeServiceRaw;
+import java.util.concurrent.Callable;
 import io.reactivex.rxjava3.annotations.NonNull;
 import io.reactivex.rxjava3.core.Observable;
 import org.knowm.xchange.dto.Order;
@@ -45,6 +53,9 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
     private final HyperliquidAuth hyperliquidAuth;
     private final int responseTimeout;
     private final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
+    // Keep every signed-request field without changing shared subscriptions or legacy placement.
+    private final ObjectMapper actionMapper = mapper.copy()
+            .setSerializationInclusion(JsonInclude.Include.ALWAYS);
     private final SynchronizedValueFactory<Long> requestIdFactory =
             new AtomicLongIncrementalTime2014NonceFactory();
 
@@ -94,7 +105,8 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
         // Get order parameters
         double size = limitOrder.getOriginalAmount().doubleValue();
         double limitPx = limitOrder.getLimitPrice().doubleValue();
-        boolean reduceOnly = false; // TODO: Check for reduce-only flag when supported
+        boolean reduceOnly = limitOrder.getType() == Order.OrderType.EXIT_BID ||
+                             limitOrder.getType() == Order.OrderType.EXIT_ASK;
 
         // Convert user reference to Cloid if provided
         Cloid cloid = null;
@@ -175,6 +187,118 @@ public class HyperliquidStreamingTradeService implements StreamingTradeService {
 
         LOG.error("Unexpected response format: {}", response);
         throw new IOException("Unexpected response format from exchange");
+    }
+
+    /**
+     * Send one cancellation over the existing connected socket, returning the native acknowledgement.
+     * This is NOT the generic cancelOrder order-state API. Each subscription sends one action.
+     * An IOException containing "outcome unknown" requires reconciliation, not automatic retry.
+     */
+    public Observable<HyperliquidResponse<Map<String, Object>>> cancelOrderAction(
+            HyperliquidCancelOrderParams params) {
+        return cancelOrderAction(params, null);
+    }
+
+    /** Same as cancelOrderAction(params), with the existing signed-request expiry field. */
+    public Observable<HyperliquidResponse<Map<String, Object>>> cancelOrderAction(
+            HyperliquidCancelOrderParams params, Long expiresAfter) {
+        return postAction(() -> HyperliquidTradeServiceRaw.createCancelAction(
+                getAssetIndex(params.getInstrument().getBase().toString()), params.getOrderId(),
+                !params.getOrderId().matches("\\d+"), params.fastRequested, params.orderKind),
+                expiresAfter, "cancel")
+                .map(payload -> mapper.convertValue(payload,
+                        new TypeReference<HyperliquidResponse<Map<String, Object>>>() {}));
+    }
+
+    /**
+     * Native single-order modification, not cancel/new. Preserves supplied order protections.
+     * Returns an action acknowledgement, never a fabricated terminal Order. Each subscription sends
+     * one action; reconcile an unknown outcome before considering another mutation.
+     */
+    public Observable<PlaceOrderResponse> modifyOrderAction(
+            Object orderId, String name, boolean isBuy, double sz, double limitPx,
+            Map<String, Object> orderType, boolean reduceOnly, Cloid cloid) {
+        return modifyOrderAction(orderId, name, isBuy, sz, limitPx, orderType, reduceOnly, cloid, null);
+    }
+
+    /** Same modification with the existing signed-request expiry field. */
+    public Observable<PlaceOrderResponse> modifyOrderAction(
+            Object orderId, String name, boolean isBuy, double sz, double limitPx,
+            Map<String, Object> orderType, boolean reduceOnly, Cloid cloid, Long expiresAfter) {
+        return postAction(() -> HyperliquidTradeServiceRaw.createModifyAction(
+                orderId, getAssetIndex(name), isBuy, sz, limitPx, orderType, reduceOnly, cloid),
+                expiresAfter, "order")
+                .map(payload -> mapper.treeToValue(payload, PlaceOrderResponse.class));
+    }
+
+    private Observable<JsonNode> postAction(
+            Callable<Map<String, Object>> buildAction, Long expiresAfter, String responseType) {
+        return Observable.defer(() -> {
+            // Fail before metadata/signing when already disconnected. Never choose another route.
+            if (!service.isSocketOpen()) {
+                return Observable.error(new NotConnectedException());
+            }
+            Map<String, Object> payload =
+                    hyperliquidAuth.createSignedActionRequest(buildAction.call(), expiresAfter);
+            Long id = requestIdFactory.createValue();
+            Object nonce = payload.get("nonce");
+            String message = actionMapper.writeValueAsString(new HyperliquidPostMessage(
+                    "post", id, new HyperliquidPostMessage.Request("action", payload)));
+            Observable<JsonNode> disconnected = service.subscribeDisconnect().take(1)
+                    .flatMap(ignored -> Observable.error(new IOException("Socket disconnected")));
+            // Subscribe to disconnect first to cover closure while subscribeSingle is sending.
+            return Observable.ambArray(disconnected, service.subscribeSingle(id, message))
+                    .take(1)
+                    .timeout(responseTimeout, MILLISECONDS)
+                    .onErrorResumeNext(error -> Observable.error(error instanceof NotConnectedException
+                            ? error : unknownActionOutcome(id, nonce, error)))
+                    .map(response -> actionPayload(response, responseType, id, nonce));
+        });
+    }
+
+    private JsonNode actionPayload(JsonNode response, String expectedType, Long id, Object nonce)
+            throws IOException {
+        JsonNode envelope = response.path("data").path("response");
+        if ("error".equals(envelope.path("type").asText())) {
+            String error = explicitText(envelope.get("payload"));
+            if (error != null) {
+                throw HyperliquidAdapters.adaptError("Action failed: ", error);
+            }
+        }
+        String error = explicitMutationError(response);
+        if (error != null) {
+            throw HyperliquidAdapters.adaptError("Action failed: ", error);
+        }
+        JsonNode payload = envelope.path("payload");
+        JsonNode statuses = payload.path("response").path("data").path("statuses");
+        if (!"action".equals(envelope.path("type").asText())
+                || !"ok".equals(payload.path("status").asText())
+                || !expectedType.equals(payload.path("response").path("type").asText())
+                || !statuses.isArray() || statuses.size() != 1) {
+            throw unknownActionOutcome(id, nonce, null);
+        }
+        JsonNode status = statuses.get(0);
+        if ("cancel".equals(expectedType)) {
+            if (!"success".equals(status.asText())) {
+                String statusError = explicitText(status);
+                if (statusError != null) {
+                    throw HyperliquidAdapters.adaptError("Order cancellation failed: ", statusError);
+                }
+                throw unknownActionOutcome(id, nonce, null);
+            }
+        } else {
+            JsonNode orderId = status.has("resting")
+                    ? status.path("resting").path("oid") : status.path("filled").path("oid");
+            if (!orderId.isIntegralNumber() || !orderId.canConvertToLong() || orderId.asLong() < 0) {
+                throw unknownActionOutcome(id, nonce, null);
+            }
+        }
+        return payload;
+    }
+
+    private IOException unknownActionOutcome(Long id, Object nonce, Throwable cause) {
+        return new IOException("Hyperliquid action outcome unknown (requestId=" + id + ", nonce="
+                + nonce + "); reconcile before retrying", cause);
     }
 
     private String explicitMutationError(JsonNode response) {
