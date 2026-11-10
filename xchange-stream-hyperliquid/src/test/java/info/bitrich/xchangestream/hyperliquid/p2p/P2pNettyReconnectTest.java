@@ -3,16 +3,22 @@ package info.bitrich.xchangestream.hyperliquid.p2p;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import info.bitrich.xchangestream.hyperliquid.p2p.P2pStreamingService.Readiness;
+import info.bitrich.xchangestream.hyperliquid.p2p.P2pStreamingService.TradePublication;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.group.ChannelGroup;
@@ -37,11 +43,14 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -172,6 +181,446 @@ public class P2pNettyReconnectTest {
             service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
       }
     }
+  }
+
+  @Test(timeout = 45000)
+  public void combinedBooksAndTradesShareSocketAndResumeIndependentSameHeightCursors()
+      throws Exception {
+    Set<String> tradeCoins = Collections.singleton("SOL");
+    AtomicInteger snapshotRequests = new AtomicInteger();
+    AtomicReference<URI> snapshotRequest = new AtomicReference<>();
+    Map<String, List<P2pWireCodec.Change>> seed = new LinkedHashMap<>();
+    seed.put("BTC", Arrays.asList(SyntheticWire.order(1, true, "BTC", "10", "1"),
+        SyntheticWire.order(2, false, "BTC", "12", "1")));
+    seed.put("ETH", Arrays.asList(SyntheticWire.order(3, true, "ETH", "20", "1"),
+        SyntheticWire.order(4, false, "ETH", "22", "1")));
+    P2pSnapshotClient snapshots = new P2pSnapshotClient(
+        URI.create("http://127.0.0.1:1/snapshot"), Collections.emptySet(), new P2pWireCodec(),
+        (uri, maxBytes) -> {
+          snapshotRequests.incrementAndGet();
+          snapshotRequest.set(uri);
+          return new P2pSnapshotClient.Response(200,
+              Collections.singletonMap("X-Snapshot-Height", "100"),
+              SyntheticWire.snapshot(100, seed));
+        }, System::currentTimeMillis,
+        delay -> { throw new AssertionError("Unexpected snapshot backoff: " + delay); });
+
+    SyntheticWire.Encoded firstBuy = fill("SOL", true, "1");
+    SyntheticWire.Encoded firstSell = fill("SOL", false, "2");
+    SyntheticWire.Encoded nextHeightBuy = fill("SOL", true, "3");
+    SyntheticWire.Encoded sameHeightSell = fill("SOL", false, "4");
+    String[] initialIds = {"p2p:trades:101:1:0", "p2p:trades:101:1:1",
+        "p2p:trades:102:1:0", "p2p:trades:102:2:0"};
+    try (LoopbackPeer peer = new LoopbackPeer()) {
+      P2pStreamingService service = new P2pStreamingService(peer.uri(), COINS, tradeCoins, snapshots);
+      TestObserver<P2pOrderBook.View> btc = service.book("BTC").test();
+      TestObserver<P2pOrderBook.View> eth = service.book("ETH").test();
+      TestObserver<TradePublication> trades = service.trades("SOL").test();
+      TestObserver<TradePublication> recoveringTrades = null;
+      TestObserver<P2pOrderBook.View> recoveringBooks = null;
+      TestObserver<Void> live = null;
+      try {
+        assertTrue("Combined transport did not connect",
+            service.connect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+        Session first = peer.nextSession();
+        negotiateStreams(first, true);
+        expectSubscription(first, false, COINS, 101);
+        assertEquals("Trade subscription must wait for the book stream boundary", 3,
+            first.commands.size());
+        first.binary(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "2")));
+        first.binary(SyntheticWire.diff(2, 101, SyntheticWire.order(1, true, "BTC", "10", "3")));
+        first.binary(SyntheticWire.status(0, 1, 101, 0));
+        expectSubscription(first, true, tradeCoins, 101);
+        assertEquals(Readiness.CATCHING_UP, service.getReadiness());
+        // Both logical streams start at seq=1 on the very same socket. Advancing trades
+        // alone makes their retained replay boundary different from the book boundary.
+        first.binary(tradeBatch(1, 101, firstBuy, firstSell));
+        first.binary(tradeBatch(2, 102, nextHeightBuy));
+        first.binary(tradeBatch(3, 102, sameHeightSell));
+        first.binary(SyntheticWire.status(3, 1, 102, 0));
+        await("combined LIVE streams", () -> service.getReadiness() == Readiness.LIVE
+            && !btc.values().isEmpty() && !eth.values().isEmpty());
+        assertCursor(service, 101, 2);
+        assertTradeCursor(service, 102, 2);
+        assertTradeIds(trades, initialIds);
+        assertLevel(last(btc).bids, "10", "3");
+        assertLevel(last(eth).asks, "22", "1");
+        assertEquals(COINS, service.getBookCoins());
+        assertEquals(tradeCoins, service.getTradeCoins());
+        assertEquals("min_height=0&coins=BTC,ETH", snapshotRequest.get().getQuery());
+        assertEquals(1, snapshotRequests.get());
+        assertStreamNegotiation(first, true);
+        assertOneSocket(peer);
+        long firstGeneration = service.getGeneration();
+        int bookPublications = btc.values().size();
+
+        // Exercise only the inherited reconnect owner, not a second explicit connect().
+        first.closeSocket();
+        await("combined generation revocation", () -> service.getGeneration() > firstGeneration
+            && service.getReadiness() != Readiness.LIVE);
+        recoveringTrades = service.trades("SOL").test();
+        recoveringBooks = service.book("BTC").test();
+        live = service.awaitLive().test();
+        Session second = peer.nextSession();
+        assertFalse("Combined reconnect reused the old socket", first.channel == second.channel);
+        second.expect("info");
+        assertEquals("Only info is allowed before reconnect negotiation", 1, second.commands.size());
+        assertCursor(service, 101, 2);
+        assertTradeCursor(service, 102, 2);
+        assertEquals("Warm reconnect fetched an extra snapshot", 1, snapshotRequests.get());
+        assertEquals("Reconnect republished a stale book", bookPublications, btc.values().size());
+        recoveringBooks.assertNoValues();
+        recoveringTrades.assertNoValues();
+        live.assertNotComplete();
+
+        replyStreamInfo(second, true);
+        expectSubscription(second, false, COINS, 101);
+        second.binary(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "2")));
+        second.binary(SyntheticWire.diff(2, 101, SyntheticWire.order(1, true, "BTC", "10", "3")));
+        second.binary(SyntheticWire.diff(3, 101, SyntheticWire.order(1, true, "BTC", "10", "4")));
+        second.binary(SyntheticWire.status(0, 1, 101, 0));
+        expectSubscription(second, true, tradeCoins, 102);
+        live.assertNotComplete();
+        // Transport sequence restarts independently; height/ordinal identities do not.
+        // These two complete frames are inclusive replay and must not be republished.
+        second.binary(tradeBatch(1, 102, nextHeightBuy));
+        second.binary(tradeBatch(2, 102, sameHeightSell));
+        second.binary(SyntheticWire.status(3, 1, 102, 0));
+        live.awaitDone(WAIT_SECONDS, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+        TestObserver<P2pOrderBook.View> recovered = recoveringBooks;
+        await("combined recovered book", () -> !recovered.values().isEmpty());
+        assertCursor(service, 101, 3);
+        assertTradeCursor(service, 102, 2);
+        assertLevel(last(recoveringBooks).bids, "10", "4");
+        assertLevel(last(eth).bids, "20", "1");
+        assertTradeIds(trades, initialIds);
+        recoveringTrades.assertNoValues();
+
+        second.binary(tradeBatch(3, 102, fill("SOL", true, "5"), fill("SOL", false, "6")));
+        await("unseen same-height fills", () -> service.getTradeCursor().getFramesAtHeight() == 3);
+        assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:1:1",
+            "p2p:trades:102:1:0", "p2p:trades:102:2:0", "p2p:trades:102:3:0",
+            "p2p:trades:102:3:1");
+        assertTradeIds(recoveringTrades, "p2p:trades:102:3:0", "p2p:trades:102:3:1");
+        assertEquals(0, new BigDecimal("5").compareTo(recoveringTrades.values().get(0).event.size));
+        assertEquals(0, new BigDecimal("6").compareTo(recoveringTrades.values().get(1).event.size));
+        assertTrue(recoveringTrades.values().get(0).event.buy);
+        assertFalse(recoveringTrades.values().get(1).event.buy);
+
+        second.binary(SyntheticWire.diff(4, 102, SyntheticWire.order(1, true, "BTC", "10", "5")));
+        second.binary(tradeBatch(4, 103, fill("SOL", true, "7")));
+        await("next-height combined cursors", () -> BigInteger.valueOf(102).equals(
+            service.getCursor().getHeight()) && BigInteger.valueOf(103).equals(
+            service.getTradeCursor().getHeight()));
+        assertCursor(service, 102, 1);
+        assertTradeCursor(service, 103, 1);
+        assertLevel(last(btc).bids, "10", "5");
+        assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:1:1",
+            "p2p:trades:102:1:0", "p2p:trades:102:2:0", "p2p:trades:102:3:0",
+            "p2p:trades:102:3:1", "p2p:trades:103:1:0");
+        assertTradeIds(recoveringTrades, "p2p:trades:102:3:0", "p2p:trades:102:3:1",
+            "p2p:trades:103:1:0");
+        assertEquals(Readiness.LIVE, service.getReadiness());
+        assertEquals("Warm reconnect must retain the only HTTP seed", 1, snapshotRequests.get());
+        assertStreamNegotiation(first, true);
+        assertStreamNegotiation(second, true);
+        assertOneSocket(peer);
+        btc.assertNoErrors();
+        eth.assertNoErrors();
+        recoveringBooks.assertNoErrors();
+      } finally {
+        if (live != null) live.dispose();
+        if (recoveringBooks != null) recoveringBooks.dispose();
+        if (recoveringTrades != null) recoveringTrades.dispose();
+        btc.dispose();
+        eth.dispose();
+        trades.dispose();
+        assertTrue("Combined client event-loop shutdown did not complete",
+            service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+      }
+    }
+  }
+
+  @Test(timeout = 30000)
+  public void tradeOnlyUsesBlockBoundaryWithoutAnyHttpSnapshot() throws Exception {
+    AtomicInteger snapshotRequests = new AtomicInteger();
+    P2pSnapshotClient snapshots = new P2pSnapshotClient(
+        URI.create("http://127.0.0.1:1/snapshot"), Collections.emptySet(), new P2pWireCodec(),
+        (uri, maxBytes) -> {
+          snapshotRequests.incrementAndGet();
+          throw new AssertionError("Trade-only connection attempted an HTTP snapshot");
+        }, System::currentTimeMillis,
+        delay -> { throw new AssertionError("Trade-only snapshot backoff: " + delay); });
+    try (LoopbackPeer peer = new LoopbackPeer()) {
+      P2pStreamingService service = new P2pStreamingService(
+          peer.uri(), Collections.emptySet(), COINS, snapshots);
+      TestObserver<TradePublication> btc = service.trades("BTC").test();
+      TestObserver<TradePublication> eth = service.trades("ETH").test();
+      try {
+        assertTrue("Trade-only transport did not connect",
+            service.connect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+        Session session = peer.nextSession();
+        negotiateStreams(session, false);
+        assertEquals("Trade-only subscribe requires a decoded block boundary", 2,
+            session.commands.size());
+        assertNull(service.getCursor());
+        assertNull(service.getTradeCursor());
+        assertEquals(Readiness.CATCHING_UP, service.getReadiness());
+        session.binary(SyntheticWire.block(BigInteger.valueOf(1000), BigInteger.valueOf(200),
+            BigInteger.valueOf(1_000_001), BigInteger.ONE, BigInteger.valueOf(1_000_002)).bytes);
+        expectSubscription(session, true, COINS, 200);
+        session.binary(tradeBatch(1, 200, fill("BTC", true, "1"), fill("ETH", false, "2")));
+        session.binary(SyntheticWire.status(3, 1, 200, 0));
+        await("trade-only LIVE", () -> service.getReadiness() == Readiness.LIVE);
+        assertTradeCursor(service, 200, 1);
+        assertTradeIds(btc, "p2p:trades:200:1:0");
+        assertTradeIds(eth, "p2p:trades:200:1:1");
+        assertEquals("BTC", btc.values().get(0).event.coin);
+        assertEquals("ETH", eth.values().get(0).event.coin);
+        assertTrue(service.getBookCoins().isEmpty());
+        assertEquals(COINS, service.getTradeCoins());
+        assertNull(service.getCursor());
+        assertEquals("Trades must never request an HTTP book snapshot", 0, snapshotRequests.get());
+        assertStreamNegotiation(session, false);
+        assertOneSocket(peer);
+      } finally {
+        btc.dispose();
+        eth.dispose();
+        assertTrue("Trade-only client event-loop shutdown did not complete",
+            service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+      }
+    }
+  }
+
+  @Test(timeout = 90000)
+  public void replayBurstBeyondWorkerCapacityPreservesGenerationAndBothCursors() throws Exception {
+    final int replayFrames = 320;
+    CountDownLatch decoding = new CountDownLatch(1);
+    CountDownLatch releaseDecoder = new CountDownLatch(1);
+    CountDownLatch ingressSettled = new CountDownLatch(1);
+    AtomicInteger decodeCalls = new AtomicInteger();
+    List<P2pWireCodec.Frame> decoded = new CopyOnWriteArrayList<>();
+    P2pWireCodec realCodec = new P2pWireCodec();
+    P2pWireCodec codec = spy(realCodec);
+    doAnswer(invocation -> {
+      if (decodeCalls.getAndIncrement() == 0) {
+        decoding.countDown();
+        assertTrue("Test did not release the replay decoder",
+            releaseDecoder.await(4, TimeUnit.SECONDS));
+      }
+      // Only scheduling is controlled: every payload still uses the real strict decoder.
+      P2pWireCodec.Frame frame = realCodec.decode(invocation.getArgument(0));
+      decoded.add(frame);
+      return frame;
+    }).when(codec).decode(any(byte[].class));
+
+    Map<String, List<P2pWireCodec.Change>> seed = new LinkedHashMap<>();
+    seed.put("BTC", Arrays.asList(SyntheticWire.order(1, true, "BTC", "10", "1"),
+        SyntheticWire.order(2, false, "BTC", "12", "1")));
+    seed.put("ETH", Arrays.asList(SyntheticWire.order(3, true, "ETH", "20", "1"),
+        SyntheticWire.order(4, false, "ETH", "22", "1")));
+    AtomicInteger snapshotRequests = new AtomicInteger();
+    P2pSnapshotClient snapshots = new P2pSnapshotClient(
+        URI.create("http://127.0.0.1:1/snapshot"), Collections.emptySet(), realCodec,
+        (uri, maxBytes) -> {
+          snapshotRequests.incrementAndGet();
+          return new P2pSnapshotClient.Response(200,
+              Collections.singletonMap("X-Snapshot-Height", "100"),
+              SyntheticWire.snapshot(100, seed));
+        }, System::currentTimeMillis,
+        delay -> { throw new AssertionError("Unexpected replay snapshot backoff: " + delay); });
+
+    try (LoopbackPeer peer = new LoopbackPeer()) {
+      P2pStreamingService service = new P2pStreamingService(peer.uri(), COINS,
+          Collections.singleton("SOL"), codec, snapshots::fetch, 256);
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      TestObserver<TradePublication> trades = service.trades("SOL").test();
+      TestObserver<Void> live = service.awaitLive().test();
+      try {
+        assertTrue("Replay transport did not connect",
+            service.connect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+        Session session = peer.nextSession();
+        negotiateStreams(session, true);
+        expectSubscription(session, false, COINS, 101);
+        long generation = service.getGeneration();
+
+        // Observe transport progress without overriding any service callback or injecting frames.
+        // A demand-controlled channel pauses reads while the worker is occupied. The old
+        // implementation instead closes on overflow. Either event wakes the assertion below;
+        // successful server writes alone are deliberately NOT treated as client consumption.
+        java.lang.reflect.Field activeChannel =
+            P2pStreamingService.class.getDeclaredField("activeChannel");
+        activeChannel.setAccessible(true);
+        Channel client = (Channel) activeChannel.get(service);
+        assertNotNull(client);
+        client.closeFuture().addListener(ignored -> ingressSettled.countDown());
+        io.netty.util.concurrent.Future<?> probeInstalled = client.eventLoop().submit(() ->
+            client.pipeline().addFirst("replay-progress", new ChannelInboundHandlerAdapter() {
+              @Override public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
+                super.channelReadComplete(ctx);
+                if (decoding.getCount() == 0 && !ctx.channel().config().isAutoRead()) {
+                  ingressSettled.countDown();
+                }
+              }
+            }));
+        assertTrue("Replay progress probe was not installed",
+            probeInstalled.await(2, TimeUnit.SECONDS));
+        assertTrue("Replay progress probe failed", probeInstalled.isSuccess());
+
+        session.binary(SyntheticWire.diff(1, 101,
+            SyntheticWire.order(1, true, "BTC", "10", "1")));
+        assertTrue("Worker never entered the real decoder", decoding.await(2, TimeUnit.SECONDS));
+        // One task is executing; the remaining 319 diffs plus LIVE exceed the unchanged
+        // 256-task queue. Submit one burst, not a write/worker-wait loop.
+        io.netty.util.concurrent.Future<?> burstWritten = session.channel.eventLoop().submit(() -> {
+          for (int sequence = 2; sequence <= replayFrames; sequence++) {
+            session.channel.write(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(
+                SyntheticWire.diff(sequence, 101,
+                    SyntheticWire.order(1, true, "BTC", "10", Integer.toString(sequence))))));
+          }
+          session.channel.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(
+              SyntheticWire.status(0, 1, 101, 0))));
+        });
+        assertTrue("Peer did not submit the replay burst", burstWritten.await(2, TimeUnit.SECONDS));
+        assertTrue("Peer replay submission failed", burstWritten.isSuccess());
+        // The readComplete for the first frame can precede decoder entry. A correctly
+        // paused channel need not produce another readComplete while that decoder waits.
+        // Observe the pause on its event loop instead of requiring a further network read.
+        client.eventLoop().execute(() -> {
+          if (!client.config().isAutoRead()) ingressSettled.countDown();
+        });
+        assertTrue("Neither demand pause nor overflow close was observed",
+            ingressSettled.await(2, TimeUnit.SECONDS));
+        assertEquals("Worker escaped its latch before the replay assertion", 1L,
+            releaseDecoder.getCount());
+        assertEquals("Replay burst revoked the provider generation: " + service.getLastFailure(),
+            generation, service.getGeneration());
+        assertNull("Replay burst must not overflow ingress", service.getLastFailure());
+        assertEquals(1, decodeCalls.get());
+        releaseDecoder.countDown();
+
+        // Completing book replay permits the independent trade subscription on this socket.
+        expectSubscription(session, true, Collections.singleton("SOL"), 101);
+        for (int sequence = 1; sequence <= replayFrames; sequence++) {
+          session.binary(tradeBatch(sequence, 101, fill("SOL", true, Integer.toString(sequence))));
+        }
+        session.binary(SyntheticWire.status(3, 1, 101, 0));
+        live.awaitDone(WAIT_SECONDS, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+        books.assertNoErrors();
+        assertFalse("Complete replay did not publish a book", books.values().isEmpty());
+        assertLevel(last(books).bids, "10", Integer.toString(replayFrames));
+        assertCursor(service, 101, replayFrames);
+        assertTradeCursor(service, 101, replayFrames);
+        trades.assertNoErrors().assertValueCount(replayFrames);
+        assertEquals("Dropped or duplicated decoded replay frames", replayFrames * 2 + 2,
+            decoded.size());
+        for (int index = 0; index < replayFrames; index++) {
+          assertTrue("Book replay frame reordered", decoded.get(index) instanceof P2pWireCodec.Diff);
+          assertEquals(BigInteger.valueOf(index + 1),
+              ((P2pWireCodec.Diff) decoded.get(index)).sequence);
+          assertTrue("Trade replay frame reordered",
+              decoded.get(replayFrames + 1 + index) instanceof P2pWireCodec.TradeBatch);
+          assertEquals(BigInteger.valueOf(index + 1),
+              ((P2pWireCodec.TradeBatch) decoded.get(replayFrames + 1 + index)).sequence);
+          assertEquals("p2p:trades:101:" + (index + 1) + ":0", trades.values().get(index).id);
+          assertEquals(0, BigDecimal.valueOf(index + 1)
+              .compareTo(trades.values().get(index).event.size));
+        }
+        assertEquals(generation, service.getGeneration());
+        assertNull(service.getLastFailure());
+        assertEquals(Readiness.LIVE, service.getReadiness());
+        assertEquals("Replay must retain its only snapshot", 1, snapshotRequests.get());
+        assertStreamNegotiation(session, true);
+        assertOneSocket(peer);
+      } finally {
+        // Always unblock before stopping the worker, including the intended RED assertion path.
+        releaseDecoder.countDown();
+        live.dispose();
+        books.dispose();
+        trades.dispose();
+        assertTrue("Replay client event-loop shutdown did not complete",
+            service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+      }
+    }
+  }
+
+  private static void negotiateStreams(Session session, boolean books) throws Exception {
+    assertEquals("{\"method\":\"info\"}", session.expect("info").toString());
+    replyStreamInfo(session, books);
+  }
+
+  private static void replyStreamInfo(Session session, boolean books) throws Exception {
+    session.channel.writeAndFlush(new TextWebSocketFrame(
+        "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{" +
+            (books ? "\"book\":\"on\"," : "") + "\"trades\":\"on\"}}"))
+        .sync();
+    JsonNode esp = session.expect("esp");
+    assertEquals(2, esp.size());
+    assertEquals(3, esp.path("version").asInt());
+  }
+
+  private static void expectSubscription(Session session, boolean trades, Set<String> coins,
+      long fromHeight) throws Exception {
+    JsonNode subscribe = session.expect("subscribe");
+    assertEquals("Unexpected subscribe fields", trades ? 4 : 3, subscribe.size());
+    if (trades) assertEquals("trades", subscribe.path("stream").asText());
+    else assertFalse("Book subscribe must use the documented default stream", subscribe.has("stream"));
+    assertTrue(subscribe.path("from_height").isIntegralNumber());
+    assertEquals(BigInteger.valueOf(fromHeight), subscribe.path("from_height").bigIntegerValue());
+    assertTrue(subscribe.path("coins").isArray());
+    Set<String> actual = new LinkedHashSet<>();
+    subscribe.path("coins").forEach(coin -> actual.add(coin.asText()));
+    assertEquals("Wrong logical-stream coin filter", coins, actual);
+    assertEquals("Duplicate logical-stream coin filter", coins.size(), subscribe.path("coins").size());
+  }
+
+  private static void assertStreamNegotiation(Session session, boolean books) {
+    assertEquals("Unexpected controls or duplicate stream subscriptions", books ? 4 : 3,
+        session.commands.size());
+    assertEquals("info", session.commands.get(0).path("method").asText());
+    assertEquals("esp", session.commands.get(1).path("method").asText());
+    assertEquals("subscribe", session.commands.get(2).path("method").asText());
+    if (books) {
+      assertFalse(session.commands.get(2).has("stream"));
+      assertEquals("subscribe", session.commands.get(3).path("method").asText());
+    }
+    assertEquals("trades", session.commands.get(books ? 3 : 2).path("stream").asText());
+    assertTrue("Unconsumed control command", session.incoming.isEmpty());
+  }
+
+  private static void assertOneSocket(LoopbackPeer peer) {
+    peer.assertHealthy();
+    assertTrue("Logical streams opened an extra WebSocket session", peer.sessions.isEmpty());
+    assertEquals("Expected only the listening channel and one shared client socket", 2,
+        peer.channels.size());
+  }
+
+  private static void assertTradeCursor(P2pStreamingService service, long height, long frames) {
+    assertNotNull(service.getTradeCursor());
+    assertEquals(BigInteger.valueOf(height), service.getTradeCursor().getHeight());
+    assertEquals(frames, service.getTradeCursor().getFramesAtHeight());
+  }
+
+  private static void assertTradeIds(TestObserver<TradePublication> trades, String... expected) {
+    trades.assertNoErrors().assertValueCount(expected.length);
+    for (int i = 0; i < expected.length; i++) assertEquals(expected[i], trades.values().get(i).id);
+  }
+
+  private static SyntheticWire.Encoded fill(String coin, boolean buy, String size) {
+    SyntheticWire.Encoded buyer = SyntheticWire.tradeSide(new byte[20], BigInteger.valueOf(11),
+        null, null, "0");
+    byte[] sellerAddress = new byte[20];
+    sellerAddress[19] = 1;
+    SyntheticWire.Encoded seller = SyntheticWire.tradeSide(sellerAddress, BigInteger.valueOf(12),
+        null, null, "0");
+    return SyntheticWire.trade(BigInteger.valueOf(1_000_123), buy, null, coin,
+        "BTC".equals(coin) ? "10" : "20", size, buy ? "Open Long" : "Open Short", buyer, seller);
+  }
+
+  private static byte[] tradeBatch(long sequence, long height, SyntheticWire.Encoded... fills) {
+    return SyntheticWire.trades(BigInteger.valueOf(sequence), BigInteger.valueOf(1_000_200),
+        BigInteger.valueOf(1_000_000), BigInteger.valueOf(height), BigInteger.valueOf(1_000_300),
+        fills).bytes;
   }
 
   private static void assertCursor(P2pStreamingService service, long height, long frames) {

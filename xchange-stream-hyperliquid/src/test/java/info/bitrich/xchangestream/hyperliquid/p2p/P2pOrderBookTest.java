@@ -5,6 +5,8 @@ import static org.junit.Assert.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import org.junit.Test;
 import org.knowm.xchange.derivative.FuturesContract;
 import org.knowm.xchange.dto.marketdata.OrderBook;
@@ -67,8 +69,21 @@ public class P2pOrderBookTest {
     assertEquals(new BigDecimal("99"), first.getBids().get(0).getLimitPrice());
     assertEquals(new BigDecimal("101"), first.getAsks().get(0).getLimitPrice());
     assertNotSame(first.getBids().get(0), second.getBids().get(0));
-    assertThrows(UnsupportedOperationException.class, () -> first.getBids().clear());
+    assertNotSame(first.getAsks().get(0), second.getAsks().get(0));
+    // The host sorts both DTO sides in place. DTO ownership must not leak into retained views.
+    Collections.reverse(first.getBids());
+    Collections.reverse(first.getAsks());
+    first.getBids().sort(Comparator.comparing(o -> o.getLimitPrice(), Comparator.reverseOrder()));
+    first.getAsks().sort(Comparator.comparing(o -> o.getLimitPrice()));
+    assertEquals(new BigDecimal("99"), first.getBids().get(0).getLimitPrice());
+    assertEquals(new BigDecimal("101"), first.getAsks().get(0).getLimitPrice());
+    first.getBids().clear();
+    first.getAsks().clear();
+    assertEquals(60, second.getBids().size());
+    assertEquals(60, second.getAsks().size());
+    assertEquals(60, view.toOrderBook(instrument).getBids().size());
     assertThrows(UnsupportedOperationException.class, () -> view.bids.clear());
+    assertThrows(UnsupportedOperationException.class, () -> view.asks.clear());
     first.getTimeStamp().setTime(0);
     assertEquals(1234, second.getTimeStamp().getTime());
     Ticker ticker = view.toTicker(instrument);
@@ -77,6 +92,25 @@ public class P2pOrderBookTest {
     assertEquals(BigDecimal.ONE, ticker.getBidSize());
     assertEquals(new BigDecimal("2"), ticker.getAskSize());
     assertNull(ticker.getLast());
+  }
+
+  @Test public void emptyAndOneSidedDtosAreSortableAndDetachedFromLaterChanges() {
+    P2pOrderBook book = new P2pOrderBook("HYPE");
+    FuturesContract instrument = new FuturesContract("HYPE/USDC/PERP");
+    OrderBook empty = book.snapshot(0, 0).toOrderBook(instrument);
+    empty.getBids().sort(Comparator.comparing(o -> o.getLimitPrice()));
+    empty.getAsks().sort(Comparator.comparing(o -> o.getLimitPrice()));
+    book.apply(SyntheticWire.order(1, true, "HYPE", "20", "2"));
+    P2pOrderBook.View retained = book.snapshot(2000, 1000);
+    OrderBook oneSided = retained.toOrderBook(instrument);
+    oneSided.getBids().sort(Comparator.comparing(o -> o.getLimitPrice()));
+    oneSided.getAsks().sort(Comparator.comparing(o -> o.getLimitPrice()));
+    book.apply(SyntheticWire.order(1, true, "HYPE", "20", "3"));
+    assertTrue(empty.getBids().isEmpty());
+    assertEquals(new BigDecimal("2"), oneSided.getBids().get(0).getOriginalAmount());
+    assertEquals(new BigDecimal("2"), retained.toOrderBook(instrument).getBids().get(0).getOriginalAmount());
+    assertEquals(new BigDecimal("3"), book.snapshot(3000, 2000).toOrderBook(instrument)
+        .getBids().get(0).getOriginalAmount());
   }
 
   @Test public void zeroSizeRemainsKnownForResizeAndInvalidChangesFail() {

@@ -66,6 +66,75 @@ final class SyntheticWire {
     System.arraycopy(original, original.length - 8, extended, original.length - 5, 8);
     return extended;
   }
+  // Independent wire inputs: no production TradeBatch/TradeEvent/TradeSide constructors.
+  static Encoded tradeSide(byte[] user, BigInteger oid, BigInteger twapId,
+      byte[] cloid, String startPosition) {
+    Fields out = new Fields().raw("user", user).u64("oid", oid)
+        .u8("hasTwapId", twapId == null ? 0 : 1);
+    if (twapId != null) out.u64("twapId", twapId);
+    out.u8("hasCloid", cloid == null ? 0 : 1);
+    if (cloid != null) out.raw("cloid", cloid);
+    return out.text("startPosition", startPosition).finish();
+  }
+  static Encoded trade(BigInteger eventTimeMicros, boolean buy, byte[] hash,
+      String coin, String price, String size, String direction, Encoded buyer, Encoded seller) {
+    Fields out = new Fields().u64("eventTimeMicros", eventTimeMicros)
+        .u8("buy", buy ? 1 : 0).u8("hasHash", hash == null ? 0 : 1);
+    if (hash != null) out.raw("hash", hash);
+    return out.text("coin", coin).text("price", price).text("size", size)
+        .text("direction", direction).part("buyer", buyer).part("seller", seller).finish();
+  }
+  static Encoded trades(BigInteger sequence, BigInteger localTimeMicros,
+      BigInteger blockTimeMicros, BigInteger height, BigInteger sentTimeMicros, Encoded... trades) {
+    Fields out = new Fields().u8("tag", 11).u64("sequence", sequence)
+        .u64("localTimeMicros", localTimeMicros).u64("blockTimeMicros", blockTimeMicros)
+        .u64("height", height).u32("count", trades.length);
+    for (int i = 0; i < trades.length; i++) out.part("trade." + i, trades[i]);
+    return out.u64("sentTimeMicros", sentTimeMicros).finish();
+  }
+  static Encoded block(BigInteger blockTimeMillis, BigInteger height, BigInteger wallTimeMicros,
+      BigInteger applyDurationMicros, BigInteger sentTimeMicros) {
+    // Vendor v3 fixed body is 33 bytes, followed by optional extensions and the sent trailer.
+    return new Fields().u8("tag", 0).u64("blockTimeMillis", blockTimeMillis)
+        .u64("height", height).u64("wallTimeMicros", wallTimeMicros)
+        .u64("applyDurationMicros", applyDurationMicros).u64("sentTimeMicros", sentTimeMicros)
+        .finish();
+  }
+  static final class Encoded {
+    final byte[] bytes;
+    final Map<String, Integer> offsets;
+    Encoded(byte[] bytes, Map<String, Integer> offsets) {
+      this.bytes = bytes;
+      this.offsets = Collections.unmodifiableMap(new LinkedHashMap<>(offsets));
+    }
+    int offset(String field) {
+      Integer offset = offsets.get(field);
+      if (offset == null) throw new IllegalArgumentException("Unknown fixture field: " + field);
+      return offset;
+    }
+  }
+  private static final class Fields {
+    final Bytes out = new Bytes();
+    final Map<String, Integer> offsets = new LinkedHashMap<>();
+    void mark(String field) { offsets.put(field, out.out.size()); }
+    Fields u8(String field, int value) { mark(field); out.u8(value); return this; }
+    Fields u32(String field, long value) { mark(field); out.u32(value); return this; }
+    Fields u64(String field, BigInteger value) { mark(field); out.u64(value); return this; }
+    Fields raw(String field, byte[] value) { mark(field); out.raw(value); return this; }
+    Fields text(String field, String value) {
+      mark(field + ".length");
+      offsets.put(field, out.out.size() + 1);
+      out.text(value);
+      return this;
+    }
+    Fields part(String field, Encoded value) {
+      int base = out.out.size();
+      value.offsets.forEach((name, offset) -> offsets.put(field + "." + name, base + offset));
+      out.raw(value.bytes);
+      return this;
+    }
+    Encoded finish() { return new Encoded(out.bytes(), offsets); }
+  }
   static final class Bytes {
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     Bytes u8(int value) { out.write(value); return this; }

@@ -3,8 +3,11 @@ package info.bitrich.xchangestream.hyperliquid.p2p;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import info.bitrich.xchangestream.service.netty.WebSocketClientHandler;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.ContinuationWebSocketFrame;
@@ -22,16 +25,24 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import org.junit.Test;
+import org.knowm.xchange.currency.CurrencyPair;
+import org.knowm.xchange.dto.marketdata.Ticker;
 
 /** Real provider handler + EmbeddedChannel ownership; no network or inherited global Rx hooks. */
 public class P2pStreamingServiceTest {
   private static final String INFO = "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\"}}";
+  private static final ThreadLocal<List<Harness>> ACTIVE_HARNESSES =
+      ThreadLocal.withInitial(ArrayList::new);
 
   @Test(timeout = 10000) public void negotiationSeedStatusAndActualIngressDiagnosticsGateReadiness() throws Exception {
     AtomicInteger fetches = new AtomicInteger();
@@ -124,7 +135,8 @@ public class P2pStreamingServiceTest {
       assertTrue(requested.await(3, TimeUnit.SECONDS));
       service.frame(SyntheticWire.diff(2, 201, SyntheticWire.order(1, true, "BTC", "10", "7")));
       service.frame(SyntheticWire.status(0, 1, 201, 0));
-      service.frame(new SyntheticWire.Bytes().u8(0).u64(0).bytes()); // Block ingress remains consumable during HTTP.
+      service.frame(SyntheticWire.block(BigInteger.ZERO, BigInteger.valueOf(999),
+          BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO).bytes); // Metadata cannot complete books.
       assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
       TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
       books.assertNoValues();
@@ -146,7 +158,8 @@ public class P2pStreamingServiceTest {
     try {
       service.start(); service.negotiate();
       service.frame(new SyntheticWire.Bytes().u8(10).u64(0).bytes());
-      service.frame(new SyntheticWire.Bytes().u8(11).u64(0).bytes());
+      service.frame(SyntheticWire.trades(BigInteger.ONE, BigInteger.ZERO, BigInteger.ZERO,
+          BigInteger.valueOf(999), BigInteger.ZERO).bytes);
       service.frame(SyntheticWire.status(3, 1, 999, 0));
       assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
       service.frame(SyntheticWire.diff(1, 105)); // Filtered heights can skip.
@@ -187,27 +200,396 @@ public class P2pStreamingServiceTest {
     } finally { service.stop(); }
   }
 
-  @Test(timeout = 10000) public void overflowInvalidatesBeforeBlockedObserverReturnsAndNoStaleReadyResurrection() throws Exception {
+  @Test(timeout = 10000) public void capacityOneBurstHasOnlyOneWorkerHandoffAndDrainsWithoutOverflow() throws Exception {
     Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 1);
+    List<BinaryWebSocketFrame> frames = new ArrayList<>();
+    try {
+      service.start(); service.negotiate();
+      long token = service.getGeneration();
+      try (WorkerBlock blocked = new WorkerBlock(service)) {
+        for (int i = 1; i <= 400; i++) {
+          BinaryWebSocketFrame frame = new BinaryWebSocketFrame(Unpooled.wrappedBuffer(SyntheticWire.diff(i, 101)));
+          frames.add(frame);
+          service.channel.writeInbound(frame);
+        }
+        assertEquals(token, service.getGeneration());
+        assertFalse(service.channel.config().isAutoRead());
+        assertEquals(1, ((ThreadPoolExecutor) worker(service)).getQueue().size());
+        assertEquals(400, ingressCount(service, "queuedFrames"));
+        assertEquals(0, frames.get(0).refCnt()); // Copied, but its reservation still belongs to the worker.
+        assertEquals(1, frames.get(399).refCnt()); // Raw frame remains in FlowControlHandler.
+        assertTrue(field(handler(service), "handoff").getBoolean(handler(service)));
+      }
+      awaitWorker(service);
+      assertCursor(service.getCursor(), 101, 400);
+      assertEquals(token, service.getGeneration());
+      assertReleased(service, frames);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void frame4097InvalidatesAtTheWholeIngressBoundAndReleasesQueuedFrames() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+    List<BinaryWebSocketFrame> frames = new ArrayList<>();
+    try {
+      service.start(); service.negotiate();
+      long token = service.getGeneration();
+      assertEquals(4096, field(service, "MAX_PENDING_FRAMES").getInt(service));
+      try (WorkerBlock blocked = new WorkerBlock(service)) {
+        for (int i = 0; i < 4096; i++) {
+          BinaryWebSocketFrame frame = heartbeatFrame();
+          frames.add(frame);
+          service.channel.writeInbound(frame);
+        }
+        assertEquals(token, service.getGeneration());
+        assertEquals(4096, ingressCount(service, "queuedFrames"));
+        assertEquals(4096 * 9L, ingressCount(service, "queuedBytes"));
+        BinaryWebSocketFrame rejected = heartbeatFrame();
+        frames.add(rejected);
+        service.channel.writeInbound(rejected);
+        assertEquals(0, rejected.refCnt());
+        assertNotEquals(token, service.getGeneration());
+        assertTrue(service.getLastFailure().getMessage().contains("frame limit"));
+        assertFalse(service.channel.isOpen());
+        service.book("BTC").test().assertNoValues();
+      }
+      awaitWorker(service);
+      assertReleased(service, frames);
+      assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void byteLimitIncludesFragmentHandoffAndFlowQueueWithoutDoubleReservation() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+    List<io.netty.handler.codec.http.websocketx.WebSocketFrame> frames = new ArrayList<>();
+    try {
+      service.start(); service.negotiate();
+      long limit = 32L * 1024 * 1024;
+      assertEquals(limit, field(service, "MAX_PENDING_BYTES").getLong(service));
+      long token = service.getGeneration();
+      try (WorkerBlock blocked = new WorkerBlock(service)) {
+        byte[] payload = SyntheticWire.diff(1, 101);
+        BinaryWebSocketFrame first = new BinaryWebSocketFrame(false, 0,
+            Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 0, 3)));
+        ContinuationWebSocketFrame last = new ContinuationWebSocketFrame(true, 0,
+            Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 3, payload.length)));
+        frames.add(first); frames.add(last);
+        service.channel.writeInbound(first);
+        pumpChannels();
+        assertEquals(3, ingressCount(service, "queuedBytes"));
+        assertEquals(1, ingressCount(service, "queuedFrames"));
+        service.channel.writeInbound(last);
+        assertEquals(payload.length, ingressCount(service, "queuedBytes"));
+        assertEquals(2, ingressCount(service, "queuedFrames"));
+        long remaining = limit - payload.length;
+        while (remaining > 0) {
+          int size = (int) Math.min(1024 * 1024, remaining);
+          BinaryWebSocketFrame frame = new BinaryWebSocketFrame(Unpooled.wrappedBuffer(new byte[size]));
+          frames.add(frame);
+          service.channel.writeInbound(frame);
+          remaining -= size;
+        }
+        assertEquals(token, service.getGeneration());
+        assertEquals(limit, ingressCount(service, "queuedBytes"));
+        BinaryWebSocketFrame rejected = new BinaryWebSocketFrame(Unpooled.wrappedBuffer(new byte[] {0}));
+        frames.add(rejected);
+        service.channel.writeInbound(rejected);
+        assertEquals(0, rejected.refCnt());
+        assertNotEquals(token, service.getGeneration());
+        assertTrue(service.getLastFailure().getMessage().contains("byte limit"));
+        assertFalse(service.channel.isOpen());
+      }
+      awaitWorker(service);
+      assertReleased(service, frames);
+      assertCursor(service.getCursor(), 101, 0);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void queuedArrivalAgeIsNotRefreshedWhenWorkerDemandResumes() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+    List<BinaryWebSocketFrame> frames = new ArrayList<>();
+    try {
+      service.start(); service.negotiate();
+      assertEquals(TimeUnit.SECONDS.toNanos(5), field(service, "MAX_QUEUE_AGE_NANOS").getLong(service));
+      long token = service.getGeneration();
+      try (WorkerBlock blocked = new WorkerBlock(service)) {
+        BinaryWebSocketFrame first = new BinaryWebSocketFrame(Unpooled.wrappedBuffer(blockHeight(101)));
+        BinaryWebSocketFrame queued = new BinaryWebSocketFrame(Unpooled.wrappedBuffer(
+            SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "1"))));
+        frames.add(first); frames.add(queued);
+        service.channel.writeInbound(first);
+        service.channel.writeInbound(queued);
+        List<?> credits = new ArrayList<>((java.util.Collection<?>) field(handler(service), "credits").get(handler(service)));
+        assertEquals(2, credits.size());
+        // Alter only the queued envelope's arrival, not a limit or the worker's execution clock.
+        field(credits.get(1), "nanos").setLong(credits.get(1), System.nanoTime() - TimeUnit.SECONDS.toNanos(6));
+        assertEquals(1, queued.refCnt());
+      }
+      waitFor(() -> !service.channel.isOpen());
+      awaitWorker(service);
+      assertNotEquals(token, service.getGeneration());
+      Throwable failure = service.getLastFailure();
+      assertNotNull("Expected an original-arrival age rejection", failure);
+      assertTrue("Expected an original-arrival age rejection, got: " + failure,
+          "P2P ingress queue age limit".equals(failure.getMessage())
+              || "P2P work queue age limit".equals(failure.getMessage()));
+      assertCursor(service.getCursor(), 101, 0);
+      assertReleased(service, frames);
+      service.book("BTC").test().assertNoValues();
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void oldestHandoffExpiresBeforeBlockedObserverReturnsWithoutReadyResurrection() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
     CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
     try {
       service.book("BTC").subscribe(view -> {
         entered.countDown();
-        try { release.await(3, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        assertTrue(release.await(3, TimeUnit.SECONDS));
       });
       service.start(); service.negotiate();
       service.frame(SyntheticWire.status(0, 1, 100, 0));
       assertTrue(entered.await(3, TimeUnit.SECONDS));
       long token = service.getGeneration();
-      service.frame(new SyntheticWire.Bytes().u8(0).u64(0).bytes());
-      service.frame(new SyntheticWire.Bytes().u8(0).u64(0).bytes());
+      Object credit = ((java.util.Queue<?>) field(handler(service), "credits").get(handler(service))).peek();
+      assertNotNull(credit);
+      field(credit, "nanos").setLong(credit, System.nanoTime() - TimeUnit.SECONDS.toNanos(6));
+      field(service, "executingSinceNanos").setLong(service, System.nanoTime());
+      checkHealth(service); // The original admission age wins even though execution looks fresh.
       assertNotEquals(token, service.getGeneration());
       assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
       service.book("BTC").test().assertNoValues();
       release.countDown();
       waitFor(() -> !service.channel.isOpen());
+      awaitWorker(service);
+      assertEquals(0, ingressCount(service, "queuedFrames"));
+      assertEquals(0, ingressCount(service, "queuedBytes"));
       assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
     } finally { release.countDown(); service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void fragmentPingPongAndControlProgressPreserveFirstArrivalAndCredits() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+    try {
+      service.start(); service.negotiate();
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      TestObserver<P2pStreamingService.Observation> observations = service.observations().test();
+      byte[] payload = SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "1"));
+      BinaryWebSocketFrame first = new BinaryWebSocketFrame(false, 0,
+          Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 0, 3)));
+      ContinuationWebSocketFrame last = new ContinuationWebSocketFrame(true, 0,
+          Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 3, payload.length)));
+      service.channel.writeInbound(first);
+      pumpChannels();
+      Object credit = ((java.util.Queue<?>) field(handler(service), "credits").get(handler(service))).peek();
+      assertNotNull(credit);
+      long nanos = field(credit, "nanos").getLong(credit);
+      long micros = field(credit, "micros").getLong(credit);
+      PingWebSocketFrame ping = new PingWebSocketFrame(Unpooled.wrappedBuffer(new byte[] {7}));
+      PongWebSocketFrame incomingPong = new PongWebSocketFrame(Unpooled.wrappedBuffer(new byte[] {8}));
+      service.channel.writeInbound(ping);
+      pumpChannels();
+      Object response = service.channel.readOutbound();
+      assertTrue(response instanceof PongWebSocketFrame);
+      assertEquals(7, ((PongWebSocketFrame) response).content().getByte(0));
+      ReferenceCountUtil.release(response);
+      service.channel.writeInbound(incomingPong);
+      pumpChannels();
+      assertEquals(1, ingressCount(service, "queuedFrames"));
+      assertEquals(3, ingressCount(service, "queuedBytes"));
+      assertEquals(0, ((ThreadPoolExecutor) worker(service)).getQueue().size());
+      service.channel.writeInbound(last);
+      awaitWorker(service);
+      observations.assertValueCount(1);
+      assertEquals(nanos, observations.values().get(0).getIngressNanos());
+      assertEquals(micros, observations.values().get(0).getIngressEpochMicros());
+      assertEquals(0, first.refCnt()); assertEquals(0, last.refCnt());
+      assertEquals(0, ping.refCnt()); assertEquals(0, incomingPong.refCnt());
+      assertEquals(0, ingressCount(service, "queuedFrames"));
+      assertEquals(0, ingressCount(service, "queuedBytes"));
+      long token = service.getGeneration();
+      // A text control behind completed binary work must receive its own demand and invalidate.
+      service.text("{\"channel\":\"error\",\"stream\":\"book\",\"data\":\"history_busy\"}");
+      waitFor(() -> !service.channel.isOpen());
+      awaitWorker(service);
+      assertNotEquals(token, service.getGeneration());
+      assertTrue(service.getLastFailure().getMessage().contains("history busy"));
+      assertEquals(0, ingressCount(service, "queuedFrames"));
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void stopAndHandlerRemovalReleaseBothHandoffAndFlowOwnedFrames() throws Exception {
+    for (String removal : Arrays.asList("stop", "p2p-flow", "p2p-ingress", "binary")) {
+      for (boolean incompleteFragment : Arrays.asList(false, true)) {
+        Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+        List<BinaryWebSocketFrame> frames = new ArrayList<>();
+        try {
+          service.start(); service.negotiate();
+          try (WorkerBlock blocked = new WorkerBlock(service)) {
+            int count = incompleteFragment ? 1 : 4;
+            for (int i = 0; i < count; i++) {
+              BinaryWebSocketFrame frame = incompleteFragment
+                  ? new BinaryWebSocketFrame(false, 0, Unpooled.wrappedBuffer(new byte[] {6}))
+                  : heartbeatFrame();
+              frames.add(frame);
+              service.channel.writeInbound(frame);
+            }
+            assertEquals(count, ingressCount(service, "queuedFrames"));
+            assertEquals(incompleteFragment ? 1 : 36, ingressCount(service, "queuedBytes"));
+            if ("stop".equals(removal)) service.disconnect().blockingAwait(3, TimeUnit.SECONDS);
+            else if ("binary".equals(removal)) service.channel.pipeline().remove(handler(service));
+            else service.channel.pipeline().remove(removal);
+            pumpChannels();
+            assertFalse(removal, service.channel.isOpen());
+            for (BinaryWebSocketFrame frame : frames) assertEquals(removal, 0, frame.refCnt());
+          }
+          if (!"stop".equals(removal)) awaitWorker(service);
+          pumpChannels();
+          assertReleased(service, frames);
+          assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        } finally { service.stop(); }
+      }
+    }
+  }
+
+  @Test(timeout = 10000) public void workerRejectionReleasesTransferredFragmentCreditsAndDoesNotResumeReads() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 1);
+    try {
+      service.start(); service.negotiate();
+      long token = service.getGeneration();
+      try (WorkerBlock blocked = new WorkerBlock(service)) {
+        worker(service).execute(() -> {}); // Real executor rejection, not a smaller ingress limit.
+        byte[] payload = SyntheticWire.diff(1, 101);
+        BinaryWebSocketFrame first = new BinaryWebSocketFrame(false, 0,
+            Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 0, 3)));
+        ContinuationWebSocketFrame last = new ContinuationWebSocketFrame(true, 0,
+            Unpooled.wrappedBuffer(Arrays.copyOfRange(payload, 3, payload.length)));
+        service.channel.writeInbound(first);
+        pumpChannels();
+        ReadProbe reads = service.channel.pipeline().get(ReadProbe.class);
+        int before = reads.reads.get();
+        service.channel.writeInbound(last);
+        pumpChannels();
+        assertNotEquals(token, service.getGeneration());
+        assertTrue(service.getLastFailure().getMessage().contains("queue overflow"));
+        assertFalse(service.channel.isOpen());
+        assertEquals(before, reads.reads.get());
+        assertEquals(0, first.refCnt()); assertEquals(0, last.refCnt());
+        assertEquals(0, ingressCount(service, "queuedFrames"));
+        assertEquals(0, ingressCount(service, "queuedBytes"));
+      }
+      awaitWorker(service);
+      assertCursor(service.getCursor(), 101, 0);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void staleHandoffCompletionCannotReadOrInvalidateReplacementChannel() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+    CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+    try {
+      service.book("BTC").subscribe(view -> {
+        entered.countDown();
+        assertTrue(release.await(3, TimeUnit.SECONDS));
+      });
+      service.start(); service.negotiate();
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      assertTrue(entered.await(3, TimeUnit.SECONDS));
+      EmbeddedChannel old = service.channel;
+      Object oldHandler = handler(service);
+      ReadProbe oldReads = old.pipeline().get(ReadProbe.class);
+      long token = service.getGeneration();
+      old.close(); old.runPendingTasks();
+      assertNotEquals(token, service.getGeneration());
+      // Install only a replacement transport while the prior worker completion is still blocked.
+      assertTrue(service.openConnection().blockingAwait(3, TimeUnit.SECONDS));
+      pumpChannels();
+      EmbeddedChannel replacement = service.channel;
+      ReadProbe replacementReads = replacement.pipeline().get(ReadProbe.class);
+      int oldReadCount = oldReads.reads.get(), replacementReadCount = replacementReads.reads.get();
+      long replacementToken = service.getGeneration();
+      Throwable replacementFailure = service.getLastFailure();
+      assertTrue(replacement.isOpen());
+      assertEquals(1, ingressCount(service, "queuedFrames"));
+      release.countDown();
+      awaitWorker(service);
+      // A fresh successor must not be aged by stale execution/credit bookkeeping either.
+      checkHealth(service);
+      assertFalse(field(oldHandler, "handoff").getBoolean(oldHandler));
+      assertEquals(oldReadCount, oldReads.reads.get());
+      assertEquals(replacementReadCount, replacementReads.reads.get());
+      assertEquals(replacementToken, service.getGeneration());
+      assertSame(replacementFailure, service.getLastFailure());
+      assertSame(replacement, service.channel);
+      assertTrue(replacement.isOpen());
+      assertEquals(0, ingressCount(service, "queuedFrames"));
+      assertEquals(0, ingressCount(service, "queuedBytes"));
+      service.book("BTC").test().assertNoValues();
+    } finally { release.countDown(); service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void successorWatchdogIgnoresOldClocksButEnforcesItsOwnSilenceAndNegotiationDeadlines() throws Exception {
+    for (boolean expireSilence : Arrays.asList(true, false)) {
+      Harness service = new Harness((coins, min) -> SyntheticWire.seed(100), 32);
+      try {
+        assertEquals(P2pStreamingService.Readiness.DISCONNECTED, service.getReadiness());
+        assertFalse(service.isTerminal());
+        service.start();
+        awaitWorker(service);
+        EmbeddedChannel oldChannel = service.channel;
+        Object oldHandler = handler(service);
+        long oldToken = service.getGeneration();
+        assertEquals(oldToken, field(service, "negotiationToken").getLong(service));
+        oldChannel.close();
+        pumpChannels();
+        awaitWorker(service);
+        long successorToken = service.getGeneration();
+        assertNotEquals(oldToken, successorToken);
+        long oldArrival = System.nanoTime() - TimeUnit.SECONDS.toNanos(31);
+        long oldNegotiation = System.nanoTime() - TimeUnit.SECONDS.toNanos(11);
+        field(oldHandler, "lastIngressNanos").setLong(oldHandler, oldArrival);
+        field(service, "negotiationSinceNanos").setLong(service, oldNegotiation);
+        assertFalse(field(service, "negotiated").getBoolean(service));
+        int controlsBeforeSuccessor = service.sent.size();
+        long beforeInstall = System.nanoTime();
+        // Do not call connect(): its completion would refresh clocks and hide this window.
+        assertTrue(service.openConnection().blockingAwait(3, TimeUnit.SECONDS));
+        pumpChannels();
+        Object successor = handler(service);
+        assertNotSame(oldHandler, successor);
+        assertNotSame(oldChannel, service.channel);
+        assertSame(successor, field(service, "activeHandler").get(service));
+        assertTrue(service.channel.isOpen());
+        assertEquals(successorToken, service.getGeneration());
+        long successorArrival = field(successor, "lastIngressNanos").getLong(successor);
+        assertTrue("Accepted handler needs a fresh silence allowance", successorArrival >= beforeInstall);
+        assertTrue(successorArrival <= System.nanoTime());
+        assertEquals(oldArrival, field(oldHandler, "lastIngressNanos").getLong(oldHandler));
+        assertEquals(oldNegotiation, field(service, "negotiationSinceNanos").getLong(service));
+        assertEquals(oldToken, field(service, "negotiationToken").getLong(service));
+        assertEquals(controlsBeforeSuccessor, service.sent.size());
+        Throwable priorFailure = service.getLastFailure();
+        checkHealth(service);
+        assertEquals(successorToken, service.getGeneration());
+        assertSame(priorFailure, service.getLastFailure());
+        assertTrue(service.channel.isOpen());
+        assertFalse(service.isTerminal());
+        if (expireSilence) {
+          field(successor, "lastIngressNanos").setLong(successor,
+              System.nanoTime() - TimeUnit.SECONDS.toNanos(31));
+        } else {
+          // The same expired negotiation timestamp becomes actionable only for its owner.
+          field(service, "negotiationToken").setLong(service, successorToken);
+        }
+        checkHealth(service);
+        waitFor(() -> !service.channel.isOpen());
+        assertNotEquals(successorToken, service.getGeneration());
+        assertEquals("P2P ingress/queue/negotiation timeout", service.getLastFailure().getMessage());
+        assertFalse("A recoverable watchdog expiry is not terminal", service.isTerminal());
+      } finally {
+        service.stop();
+        assertTrue(service.isTerminal());
+      }
+    }
   }
 
   @Test(timeout = 10000) public void blockIngressKeepsUnchangedBooksLiveButIngressSilenceClosesTransport() throws Exception {
@@ -216,15 +598,16 @@ public class P2pStreamingServiceTest {
       service.start(); service.negotiate();
       service.frame(SyntheticWire.status(0, 1, 100, 0));
       waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.LIVE);
-      java.lang.reflect.Field lastIngress = P2pStreamingService.class.getDeclaredField("lastIngressNanos");
-      lastIngress.setAccessible(true);
+      awaitWorker(service);
+      Object owner = handler(service);
+      java.lang.reflect.Field lastIngress = field(owner, "lastIngressNanos");
       java.lang.reflect.Method check = P2pStreamingService.class.getDeclaredMethod("checkHealth");
       check.setAccessible(true);
-      lastIngress.setLong(service, System.nanoTime() - TimeUnit.SECONDS.toNanos(31));
+      lastIngress.setLong(owner, System.nanoTime() - TimeUnit.SECONDS.toNanos(31));
       service.frame(new SyntheticWire.Bytes().u8(0).u64(0).bytes());
       check.invoke(service);
       assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
-      lastIngress.setLong(service, System.nanoTime() - TimeUnit.SECONDS.toNanos(31));
+      lastIngress.setLong(owner, System.nanoTime() - TimeUnit.SECONDS.toNanos(31));
       check.invoke(service);
       assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
       waitFor(() -> !service.channel.isOpen());
@@ -240,6 +623,7 @@ public class P2pStreamingServiceTest {
       try {
         service.start(); service.text(message);
         waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        assertTrue(service.isTerminal());
         service.connect().test().assertError(IllegalStateException.class);
         service.awaitLive().test().awaitDone(3, TimeUnit.SECONDS).assertError(java.io.IOException.class);
       } finally { service.stop(); }
@@ -325,6 +709,7 @@ public class P2pStreamingServiceTest {
         service.start(); service.negotiate();
         service.frame(SyntheticWire.status(0, 1, 100, 0));
         waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.LIVE);
+        awaitWorker(service);
         long token = service.getGeneration();
         if (binary) service.channel.writeInbound(new BinaryWebSocketFrame(false, 0, Unpooled.wrappedBuffer(new byte[] {6})));
         else service.channel.writeInbound(new TextWebSocketFrame(false, 0, "{"));
@@ -337,6 +722,7 @@ public class P2pStreamingServiceTest {
         check.invoke(service);
         assertEquals(token, service.getGeneration()); // A new fragment is not itself a failure.
         service.channel.writeInbound(new PingWebSocketFrame(Unpooled.wrappedBuffer(new byte[] {1})));
+        pumpChannels();
         Object pong = service.channel.readOutbound();
         assertTrue(pong instanceof PongWebSocketFrame);
         ReferenceCountUtil.release(pong);
@@ -365,6 +751,7 @@ public class P2pStreamingServiceTest {
       assertNotEquals(0, started.getLong(handler));
       service.channel.writeInbound(new ContinuationWebSocketFrame(true, 0, Unpooled.wrappedBuffer(Arrays.copyOfRange(bytes, 3, bytes.length))));
       waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.LIVE);
+      awaitWorker(service);
       assertEquals(0, started.getLong(handler));
       java.lang.reflect.Method check = P2pStreamingService.class.getDeclaredMethod("checkHealth");
       check.setAccessible(true);
@@ -426,25 +813,1104 @@ public class P2pStreamingServiceTest {
     }
   }
 
+  @Test(timeout = 10000) public void disjointChannelsUseExactFiltersAndBooksStayUsableWhileTradesCatchUp() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = new Harness(Collections.singleton("BTC"), Collections.singleton("ETH"), (coins, min) -> {
+      fetches.incrementAndGet();
+      assertEquals(Collections.singleton("BTC"), coins);
+      return SyntheticWire.seed(100, SyntheticWire.order(1, true, "BTC", "99", "1"),
+          SyntheticWire.order(2, false, "BTC", "100", "1"));
+    }, 32);
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      TestObserver<P2pStreamingService.Observation> observations = service.observations().test();
+      service.start();
+      TestObserver<Void> ready = service.awaitLive().test();
+      service.negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\",\"trades\":\"on\"}}", 2);
+      assertEquals(Collections.singleton("BTC"), service.getBookCoins());
+      assertEquals(Collections.singleton("ETH"), service.getTradeCoins());
+      assertSubscription(service.sent.get(2), "book", "BTC", 101);
+      service.frame(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "99", "2")));
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      waitFor(() -> service.sent.size() == 4 && books.values().size() == 1);
+      assertSubscription(service.sent.get(3), "trades", "ETH", 101);
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, service.getReadiness());
+      ready.assertNotComplete().assertNoErrors();
+      service.book("BTC").test().assertValueCount(1); // Book availability is not aggregate readiness.
+      P2pOrderBook.View before = books.values().get(0);
+      Ticker ticker = before.toTicker(CurrencyPair.BTC_USDT);
+      service.frame(SyntheticWire.status(3, 0, 105, 0));
+      service.frame(tradeBatch(1, 105)); // A processed trade frame is a worker barrier.
+      waitFor(() -> service.getTradeCursor().getHeight().equals(BigInteger.valueOf(105))
+          && service.getTradeCursor().getFramesAtHeight() == 1);
+      assertEquals(BigInteger.valueOf(101), service.getCursor().getHeight());
+      assertEquals(1, service.getCursor().getFramesAtHeight());
+      books.assertValueCount(1);
+      observations.assertNoValues();
+      service.frame(SyntheticWire.status(3, 1, 105, 0));
+      ready.awaitDone(3, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+      P2pOrderBook.View after = service.book("BTC").test().assertValueCount(1).values().get(0);
+      assertEquals(before.receivedAtMicros, after.receivedAtMicros);
+      assertEquals(before.receivedAtNanos, after.receivedAtNanos);
+      assertEquals(ticker.getTimestamp(), after.toTicker(CurrencyPair.BTC_USDT).getTimestamp());
+      assertEquals(ticker.getBid(), after.toTicker(CurrencyPair.BTC_USDT).getBid());
+      assertEquals(ticker.getAsk(), after.toTicker(CurrencyPair.BTC_USDT).getAsk());
+      books.assertValueCount(1);
+      observations.assertNoValues();
+      assertEquals(1, fetches.get());
+      assertEquals(4, service.sent.size());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void tradeOnlyUsesFirstNegotiatedBlockCompleteHeightWithoutHttpOrBookCapability() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = new Harness(Collections.emptySet(), Collections.singleton("BTC"), (coins, min) -> {
+      fetches.incrementAndGet();
+      throw new AssertionError("Trade-only mode must not fetch an HTTP snapshot");
+    }, 32);
+    try {
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+      service.start();
+      service.frame(blockHeight(12)); // Pre-negotiation metadata cannot choose the boundary.
+      service.negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"trades\":\"on\"}}", 1);
+      assertNull(service.getTradeCursor());
+      assertTrue(service.getBookCoins().isEmpty());
+      assertEquals(2, service.sent.size()); // info + esp, no unbounded live trade subscription.
+      service.frame(blockHeight(200));
+      waitFor(() -> service.sent.size() == 3);
+      assertSubscription(service.sent.get(2), "trades", "BTC", 200);
+      assertEquals(BigInteger.valueOf(200), service.getTradeCursor().getHeight());
+      assertEquals(0, service.getTradeCursor().getFramesAtHeight());
+      TestObserver<Void> ready = service.awaitLive().test();
+      service.frame(blockHeight(900)); // Later metadata must not rebase the complete-height cursor.
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+      waitFor(() -> trades.values().size() == 1);
+      assertEquals("p2p:trades:200:1:0", trades.values().get(0).id);
+      ready.assertNotComplete().assertNoErrors(); // Unseen replay events need not wait for LIVE.
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      ready.awaitDone(3, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+      assertEquals(BigInteger.valueOf(200), service.getTradeCursor().getHeight());
+      assertEquals(1, service.getTradeCursor().getFramesAtHeight());
+      assertEquals(0, fetches.get());
+      assertEquals(3, service.sent.size());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void equalPriceFillsHaveStableFrameIdsAndLateTradeSubscribersSeeOnlyFutureEvents() throws Exception {
+    Harness service = new Harness(Collections.emptySet(), Collections.singleton("BTC"), (coins, min) -> {
+      throw new AssertionError("Trade-only mode must not fetch an HTTP snapshot");
+    }, 32);
+    try {
+      TestObserver<P2pStreamingService.TradePublication> first = service.trades("BTC").test();
+      TestObserver<P2pStreamingService.TradePublication> second = service.trades("BTC").test();
+      service.startTrades(200);
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.LIVE);
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true), tradeEvent("BTC", true), tradeEvent("BTC", false)));
+      waitFor(() -> first.values().size() == 3 && second.values().size() == 3);
+      for (int i = 0; i < 3; i++) {
+        P2pStreamingService.TradePublication publication = first.values().get(i);
+        assertEquals("p2p:trades:200:1:" + i, publication.id);
+        assertEquals(publication.id, second.values().get(i).id);
+        assertEquals("BTC", publication.event.coin);
+        assertEquals(new BigInteger("123456789"), publication.event.eventTimeMicros);
+        assertEquals(0, new BigDecimal("10.25").compareTo(publication.event.price));
+        assertEquals(0, new BigDecimal("2.5").compareTo(publication.event.size));
+        assertEquals(i < 2, publication.event.buy);
+      }
+      TestObserver<P2pStreamingService.TradePublication> late = service.trades("BTC").test();
+      late.assertNoValues();
+      second.dispose();
+      service.frame(tradeBatch(2, 200, tradeEvent("BTC", true)));
+      waitFor(() -> first.values().size() == 4 && late.values().size() == 1);
+      assertEquals("p2p:trades:200:2:0", late.values().get(0).id);
+      assertEquals(first.values().get(3).id, late.values().get(0).id);
+      second.assertValueCount(3);
+      service.frame(tradeBatch(3, 201, tradeEvent("BTC", true)));
+      waitFor(() -> first.values().size() == 5 && late.values().size() == 2);
+      assertEquals("p2p:trades:201:1:0", first.values().get(4).id); // Not connection sequence 3.
+      assertEquals(3, service.sent.size()); // Observers never create extra wire subscriptions.
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void malformedLaterTradeOrForeignCoinRejectsWholeBatchBeforeAnyPublication() throws Exception {
+    for (boolean foreignCoin : Arrays.asList(false, true)) {
+      Harness service = new Harness(Collections.emptySet(), Collections.singleton("BTC"), (coins, min) -> {
+        throw new AssertionError("Trade-only mode must not fetch an HTTP snapshot");
+      }, 32);
+      try {
+        TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+        service.startTrades(200);
+        service.frame(SyntheticWire.status(3, 1, 200, 0));
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.LIVE);
+        SyntheticWire.Encoded batch = SyntheticWire.trades(BigInteger.ONE, BigInteger.ZERO,
+            BigInteger.ZERO, BigInteger.valueOf(200), BigInteger.ZERO,
+            tradeEvent("BTC", true), tradeEvent(foreignCoin ? "ETH" : "BTC", false));
+        if (!foreignCoin) batch.bytes[batch.offset("trade.1.buy")] = 2;
+        long generation = service.getGeneration();
+        service.frame(batch.bytes);
+        waitFor(() -> !service.channel.isOpen());
+        trades.assertNoValues();
+        assertNotEquals(generation, service.getGeneration());
+        assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        assertNotNull(service.getLastFailure());
+        assertEquals(BigInteger.valueOf(200), service.getTradeCursor().getHeight());
+        assertEquals(0, service.getTradeCursor().getFramesAtHeight());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void missingRequestedTradeOrBookCapabilityFailsExplicitlyBeforeSubscription() throws Exception {
+    for (String info : Arrays.asList(
+        "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\"}}",
+        "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\",\"trades\":\"off\"}}",
+        "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"off\",\"trades\":\"on\"}}",
+        "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"trades\":\"on\"}}")) {
+      Harness service = new Harness(Collections.singleton("BTC"), Collections.singleton("ETH"),
+          (coins, min) -> SyntheticWire.seed(100), 32);
+      try {
+        service.start();
+        service.text(info);
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        service.connect().test().assertError(IllegalStateException.class);
+        service.awaitLive().test().awaitDone(3, TimeUnit.SECONDS).assertError(java.io.IOException.class);
+        assertNotNull(service.getLastFailure());
+        assertEquals(Collections.singletonList("{\"method\":\"info\"}"), service.sent);
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void independentSequencesWarmReplayAndFilteredHeightsPreserveTradeIdsWhileBooksRecover() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("ETH").test();
+      startCombined(service);
+      service.frame(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "99", "2")));
+      service.frame(SyntheticWire.diff(2, 101, SyntheticWire.order(1, true, "BTC", "99", "3")));
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      awaitWorker(service);
+      assertSubscription(service.sent.get(3), "trades", "ETH", 101);
+      service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+      service.frame(tradeBatch(2, 101, tradeEvent("ETH", false)));
+      service.frame(SyntheticWire.status(3, 1, 101, 0));
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertCursor(service.getCursor(), 101, 2);
+      assertCursor(service.getTradeCursor(), 101, 2);
+      assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:2:0");
+
+      long oldGeneration = service.getGeneration();
+      service.channel.close(); service.channel.runPendingTasks();
+      assertNotEquals(oldGeneration, service.getGeneration());
+      int before = service.sent.size();
+      startCombined(service);
+      assertSubscription(service.sent.get(before + 2), "book", "BTC", 101);
+      service.frame(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "99", "2")));
+      service.frame(SyntheticWire.diff(2, 101, SyntheticWire.order(1, true, "BTC", "99", "3")));
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      awaitWorker(service);
+      assertSubscription(service.sent.get(before + 3), "trades", "ETH", 101);
+      service.frame(SyntheticWire.status(0, 0, 101, 0)); // Books can fall behind after trade replay starts.
+      service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+      service.frame(tradeBatch(2, 101, tradeEvent("ETH", false)));
+      awaitWorker(service);
+      int bookPublications = books.values().size();
+      assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:2:0");
+      service.frame(tradeBatch(3, 101, tradeEvent("ETH", true), tradeEvent("ETH", true)));
+      service.frame(tradeBatch(4, 108, tradeEvent("ETH", false))); // Filtered heights need not be consecutive.
+      service.frame(tradeBatch(5, 108, tradeEvent("ETH", true)));
+      service.frame(SyntheticWire.status(3, 1, 108, 0));
+      awaitWorker(service);
+      assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:2:0",
+          "p2p:trades:101:3:0", "p2p:trades:101:3:1", "p2p:trades:108:1:0", "p2p:trades:108:2:0");
+      assertCursor(service.getTradeCursor(), 108, 2);
+      assertCursor(service.getCursor(), 101, 2);
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, service.getReadiness());
+      books.assertValueCount(bookPublications);
+      service.frame(SyntheticWire.diff(3, 109, SyntheticWire.order(1, true, "BTC", "99", "4")));
+      service.frame(SyntheticWire.status(0, 1, 109, 0));
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertCursor(service.getCursor(), 109, 1);
+      assertCursor(service.getTradeCursor(), 108, 2);
+      assertEquals(1, fetches.get());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void historyOwnersRemainUntilMatchingLiveAndAllSameHeightReplayFrames() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      startCombined(service);
+      service.frame(SyntheticWire.status(0, 0, 101, 0));
+      service.frame(SyntheticWire.status(1, 1, 999, 0)); // Another stream cannot release BOOK.
+      service.frame(SyntheticWire.diff(1, 101));
+      service.frame(SyntheticWire.diff(2, 101));
+      assertHistoryOwner(service, "BOOK");
+      assertEquals(3, service.sent.size());
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      assertHistoryOwner(service, "TRADES");
+      assertEquals(4, service.sent.size());
+      service.frame(SyntheticWire.status(3, 0, 101, 0));
+      service.frame(tradeBatch(1, 101));
+      service.frame(tradeBatch(2, 101));
+      service.frame(SyntheticWire.status(0, 1, 101, 0)); // BOOK's LIVE cannot release TRADES.
+      assertHistoryOwner(service, "TRADES");
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, service.getReadiness());
+      service.frame(SyntheticWire.status(3, 1, 101, 0));
+      assertHistoryOwner(service, null);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+
+      service.channel.close(); service.channel.runPendingTasks();
+      int before = service.sent.size();
+      startCombined(service);
+      service.frame(SyntheticWire.diff(1, 101));
+      assertHistoryOwner(service, "BOOK");
+      assertEquals(before + 3, service.sent.size());
+      service.frame(SyntheticWire.diff(2, 101));
+      assertHistoryOwner(service, "BOOK"); // Finishing replay alone is not a LIVE acknowledgement.
+      assertEquals(before + 3, service.sent.size());
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      assertHistoryOwner(service, "TRADES");
+      assertSubscription(service.sent.get(before + 3), "trades", "ETH", 101);
+      service.frame(tradeBatch(1, 101));
+      assertHistoryOwner(service, "TRADES");
+      service.frame(tradeBatch(2, 101));
+      assertHistoryOwner(service, "TRADES");
+      service.frame(SyntheticWire.status(3, 1, 101, 0));
+      assertHistoryOwner(service, null);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertCursor(service.getCursor(), 101, 2);
+      assertCursor(service.getTradeCursor(), 101, 2);
+      assertEquals(before + 4, service.sent.size());
+      assertEquals(1, fetches.get());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void liveBeforeCompleteSameHeightReplayCannotReleaseEitherHistoryOwner() throws Exception {
+    for (boolean tradeOwner : Arrays.asList(false, true)) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        startCombined(service);
+        service.frame(SyntheticWire.diff(1, 101));
+        service.frame(SyntheticWire.diff(2, 101));
+        service.frame(SyntheticWire.status(0, 1, 101, 0));
+        awaitWorker(service);
+        service.frame(tradeBatch(1, 101));
+        service.frame(tradeBatch(2, 101));
+        service.frame(SyntheticWire.status(3, 1, 101, 0));
+        awaitWorker(service);
+        service.channel.close(); service.channel.runPendingTasks();
+        int before = service.sent.size();
+        startCombined(service);
+        service.frame(SyntheticWire.diff(1, 101));
+        if (tradeOwner) {
+          service.frame(SyntheticWire.diff(2, 101));
+          service.frame(SyntheticWire.status(0, 1, 101, 0));
+          assertHistoryOwner(service, "TRADES");
+          service.frame(tradeBatch(1, 101));
+        }
+        service.frame(SyntheticWire.status(tradeOwner ? 3 : 0, 1, 101, 0));
+        waitFor(() -> !service.channel.isOpen());
+        awaitWorker(service);
+        assertNotEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        assertEquals(before + (tradeOwner ? 4 : 3), service.sent.size());
+        assertCursor(service.getCursor(), 101, 2);
+        assertCursor(service.getTradeCursor(), 101, 2);
+        assertNotNull(service.getLastFailure());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void historyBusyUsesPendingOwnerAndWarmRetriesWithoutResettingEitherCursor() throws Exception {
+    for (boolean tradeOwner : Arrays.asList(false, true)) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        TestObserver<P2pStreamingService.TradePublication> trades = service.trades("ETH").test();
+        startCombined(service);
+        service.frame(SyntheticWire.diff(1, 101));
+        if (tradeOwner) {
+          service.frame(SyntheticWire.status(0, 1, 101, 0));
+          awaitWorker(service);
+          service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+          service.frame(SyntheticWire.status(3, 0, 101, 0));
+        } else {
+          service.frame(SyntheticWire.status(0, 0, 101, 0));
+        }
+        assertHistoryOwner(service, tradeOwner ? "TRADES" : "BOOK");
+        service.text("{\"channel\":\"error\",\"data\":\"history_busy\"}");
+        waitFor(() -> !service.channel.isOpen());
+        assertNotEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
+        assertCursor(service.getCursor(), 101, 1);
+        assertCursor(service.getTradeCursor(), 101, tradeOwner ? 1 : 0);
+        int before = service.sent.size();
+        startCombined(service);
+        assertSubscription(service.sent.get(before + 2), "book", "BTC", 101);
+        service.frame(SyntheticWire.diff(1, 101));
+        service.frame(SyntheticWire.status(0, 1, 101, 0));
+        awaitWorker(service);
+        assertSubscription(service.sent.get(before + 3), "trades", "ETH", 101);
+        service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+        service.frame(tradeBatch(2, 101, tradeEvent("ETH", false)));
+        service.frame(SyntheticWire.status(3, 1, 101, 0));
+        awaitWorker(service);
+        assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:101:2:0");
+        assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        assertCursor(service.getCursor(), 101, 1);
+        assertCursor(service.getTradeCursor(), 101, 2);
+        assertEquals(1, fetches.get());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void tradeRetentionWarnsInclusiveRangeAndResubscribesAtOldestPlusOneHundred() throws Exception {
+    for (String error : Arrays.asList(
+        "{\"channel\":\"error\",\"data\":\"history_unavailable\",\"oldest_height\":250}",
+        "{\"channel\":\"error\",\"data\":{\"code\":\"history_unavailable\",\"oldest_height\":\"250\"}}")) {
+      Harness service = tradeOnlyService();
+      try {
+        TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+        service.startTrades(200);
+        service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+        assertHistoryOwner(service, "TRADES");
+        service.text(error);
+        waitFor(() -> !service.channel.isOpen());
+        assertCursor(service.getTradeCursor(), 350, 0);
+        assertEquals("P2P trades missing heights [200,349] (retention)", service.getLastTradeContinuityWarning());
+        assertNotEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
+        restartTrades(service, 350);
+        service.frame(tradeBatch(1, 350, tradeEvent("BTC", false)));
+        service.frame(SyntheticWire.status(3, 1, 350, 0));
+        awaitWorker(service);
+        assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        assertCursor(service.getTradeCursor(), 350, 1);
+        assertTradeIds(trades, "p2p:trades:200:1:0", "p2p:trades:350:1:0");
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void unsafeTradeRetentionBoundariesFailClosedWithoutResettingCursor() throws Exception {
+    for (String oldest : Arrays.asList("", ",\"oldest_height\":100", ",\"oldest_height\":99",
+        ",\"oldest_height\":-1", ",\"oldest_height\":200.5", ",\"oldest_height\":\"unknown\"",
+        ",\"oldest_height\":18446744073709551516", ",\"oldest_height\":18446744073709551616")) {
+      Harness service = tradeOnlyService();
+      try {
+        TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+        service.startTrades(200);
+        service.text("{\"channel\":\"error\",\"data\":\"history_unavailable\"" + oldest + "}");
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        assertCursor(service.getTradeCursor(), 200, 0);
+        assertTrue(service.getLastFailure().getMessage().contains("Trade continuity failure"));
+        assertNull(service.getLastTradeContinuityWarning());
+        assertEquals(3, service.sent.size());
+        trades.assertNoValues();
+        service.connect().test().assertError(IllegalStateException.class);
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void unscopedHistoryErrorsWithoutPendingOwnerFailClosed() throws Exception {
+    for (String code : Arrays.asList("history_busy", "history_unavailable")) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        startCombined(service);
+        service.frame(SyntheticWire.status(0, 1, 100, 0));
+        awaitWorker(service);
+        service.frame(SyntheticWire.status(3, 1, 101, 0));
+        assertHistoryOwner(service, null);
+        assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+        service.text("{\"channel\":\"error\",\"data\":\"" + code + "\",\"oldest_height\":250}");
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        assertTrue(service.getLastFailure().getMessage().contains("Unattributable"));
+        assertCursor(service.getCursor(), 101, 0);
+        assertCursor(service.getTradeCursor(), 101, 0);
+        assertEquals(1, fetches.get());
+        assertEquals(4, service.sent.size());
+        service.connect().test().assertError(IllegalStateException.class);
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void tradeGapReportsInclusiveMissingRangeAndContinuesWithoutBookSnapshotOrRetimestamp() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      TestObserver<P2pStreamingService.Observation> observations = service.observations().test();
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("ETH").test();
+      startCombined(service);
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+      service.frame(SyntheticWire.status(3, 1, 101, 0));
+      awaitWorker(service);
+      P2pOrderBook.View original = books.values().get(0);
+      long generation = service.getGeneration();
+      service.frame(SyntheticWire.status(3, 0, 102, 0));
+      service.frame(SyntheticWire.status(3, 2, 102, 105));
+      awaitWorker(service);
+      assertEquals("P2P trades missing heights [102,105] (provider gap)", service.getLastTradeContinuityWarning());
+      assertCursor(service.getTradeCursor(), 106, 0);
+      assertCursor(service.getCursor(), 101, 0);
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, service.getReadiness());
+      service.frame(tradeBatch(2, 106, tradeEvent("ETH", false)));
+      service.frame(SyntheticWire.status(3, 1, 106, 0));
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertEquals(generation, service.getGeneration());
+      assertEquals(1, fetches.get());
+      assertEquals(4, service.sent.size());
+      assertCursor(service.getTradeCursor(), 106, 1);
+      assertCursor(service.getCursor(), 101, 0);
+      assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:106:1:0");
+      books.assertValueCount(1);
+      observations.assertNoValues();
+      P2pOrderBook.View retained = service.book("BTC").test().assertValueCount(1).values().get(0);
+      assertEquals(original.receivedAtMicros, retained.receivedAtMicros);
+      assertEquals(original.receivedAtNanos, retained.receivedAtNanos);
+      assertEquals(original.toTicker(CurrencyPair.BTC_USDT).getTimestamp(),
+          retained.toTicker(CurrencyPair.BTC_USDT).getTimestamp());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void regressingOrOverflowingTradeGapBoundariesFailClosedWithoutCursorCommit() throws Exception {
+    for (BigInteger toHeight : Arrays.asList(BigInteger.valueOf(199), new BigInteger("18446744073709551615"))) {
+      Harness service = tradeOnlyService();
+      try {
+        TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+        service.startTrades(200);
+        service.frame(SyntheticWire.status(3, 1, 200, 0));
+        awaitWorker(service);
+        long fromHeight = toHeight.equals(BigInteger.valueOf(199)) ? 190 : 200;
+        service.frame(new SyntheticWire.Bytes().u8(13).u8(3).u8(2)
+            .u64(fromHeight).u64(toHeight).u64(1_000_002).bytes());
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        assertCursor(service.getTradeCursor(), 200, 0);
+        assertTrue(service.getLastFailure().getMessage().contains("invalid gap boundary"));
+        assertNull(service.getLastTradeContinuityWarning());
+        assertEquals(3, service.sent.size());
+        trades.assertNoValues();
+        service.connect().test().assertError(IllegalStateException.class);
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void bookGapColdSnapshotPreservesTradeCursorAndSameHeightDeduplication() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = new Harness(Collections.singleton("BTC"), Collections.singleton("ETH"), (coins, min) -> {
+      assertEquals(Collections.singleton("BTC"), coins);
+      assertEquals(BigInteger.ZERO, min);
+      return SyntheticWire.seed(fetches.incrementAndGet() == 1 ? 100 : 150);
+    }, 32);
+    try {
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("ETH").test();
+      startCombined(service);
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      service.frame(tradeBatch(1, 120, tradeEvent("ETH", true)));
+      service.frame(tradeBatch(2, 120, tradeEvent("ETH", false)));
+      service.frame(SyntheticWire.status(3, 1, 120, 0));
+      awaitWorker(service);
+      assertCursor(service.getTradeCursor(), 120, 2);
+      service.frame(SyntheticWire.status(0, 2, 102, 110));
+      waitFor(() -> !service.channel.isOpen());
+      int before = service.sent.size();
+      startCombined(service);
+      assertEquals(2, fetches.get());
+      assertSubscription(service.sent.get(before + 2), "book", "BTC", 151);
+      assertCursor(service.getTradeCursor(), 120, 2);
+      service.frame(SyntheticWire.status(0, 1, 150, 0));
+      awaitWorker(service);
+      assertSubscription(service.sent.get(before + 3), "trades", "ETH", 120);
+      service.frame(tradeBatch(1, 120, tradeEvent("ETH", true)));
+      service.frame(tradeBatch(2, 120, tradeEvent("ETH", false)));
+      service.frame(tradeBatch(3, 120, tradeEvent("ETH", true)));
+      service.frame(SyntheticWire.status(3, 1, 120, 0));
+      awaitWorker(service);
+      assertTradeIds(trades, "p2p:trades:120:1:0", "p2p:trades:120:2:0", "p2p:trades:120:3:0");
+      assertCursor(service.getTradeCursor(), 120, 3);
+      assertCursor(service.getCursor(), 151, 0);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void tradeSequenceGapWarmRetriesInclusivelyAndStillChecksSkippedReplaySequence() throws Exception {
+    Harness service = tradeOnlyService();
+    try {
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+      service.startTrades(200);
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      awaitWorker(service);
+      service.frame(tradeBatch(3, 201, tradeEvent("BTC", false)));
+      waitFor(() -> !service.channel.isOpen());
+      assertCursor(service.getTradeCursor(), 200, 1);
+      assertTradeIds(trades, "p2p:trades:200:1:0");
+      restartTrades(service, 200);
+      service.frame(tradeBatch(2, 200, tradeEvent("BTC", true))); // Retained frames must also start at seq=1.
+      waitFor(() -> !service.channel.isOpen());
+      assertCursor(service.getTradeCursor(), 200, 1);
+      assertTrue(service.getLastFailure().getMessage().contains("sequence"));
+      assertTradeIds(trades, "p2p:trades:200:1:0");
+      restartTrades(service, 200);
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+      service.frame(tradeBatch(2, 201, tradeEvent("BTC", false)));
+      service.frame(SyntheticWire.status(3, 1, 201, 0));
+      awaitWorker(service);
+      assertTradeIds(trades, "p2p:trades:200:1:0", "p2p:trades:201:1:0");
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void interruptedTradeBatchFansOutCurrentEventAndReplaysOnlyUncommittedSuffix() throws Exception {
+    for (long height : Arrays.asList(200L, 201L)) {
+      Harness service = tradeOnlyService();
+      AtomicInteger interruptions = new AtomicInteger();
+      try {
+        TestObserver<P2pStreamingService.TradePublication> first = service.trades("BTC").doOnNext(event -> {
+          if (interruptions.compareAndSet(0, 1)) {
+            service.channel.close(); service.channel.runPendingTasks();
+          }
+        }).test();
+        TestObserver<P2pStreamingService.TradePublication> second = service.trades("BTC").test();
+        service.startTrades(200);
+        service.frame(tradeBatch(1, 200)); // A committed frame precedes the interrupted one.
+        service.frame(SyntheticWire.status(3, 1, 200, 0));
+        awaitWorker(service);
+        long oldGeneration = service.getGeneration();
+        byte[] interrupted = tradeBatch(2, height, tradeEvent("BTC", true), tradeEvent("BTC", false), tradeEvent("BTC", true));
+        service.frame(interrupted);
+        waitFor(() -> !service.channel.isOpen());
+        awaitWorker(service);
+        String prefix = "p2p:trades:" + height + ":" + (height == 200 ? 2 : 1) + ":";
+        assertNotEquals(oldGeneration, service.getGeneration());
+        assertTradeIds(first, prefix + "0");
+        assertTradeIds(second, prefix + "0");
+        assertCursor(service.getTradeCursor(), 200, 1); // Neither frame count nor new height committed.
+        restartTrades(service, 200);
+        service.frame(tradeBatch(1, 200));
+        service.frame(interrupted);
+        service.frame(SyntheticWire.status(3, 1, height, 0));
+        awaitWorker(service);
+        assertTradeIds(first, prefix + "0", prefix + "1", prefix + "2");
+        assertTradeIds(second, prefix + "0", prefix + "1", prefix + "2");
+        assertCursor(service.getTradeCursor(), height, height == 200 ? 2 : 1);
+        assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void changedInterruptedTradeReplayFailsBeforeAnyAdditionalPublication() throws Exception {
+    for (boolean changePrefix : Arrays.asList(false, true)) {
+      Harness service = tradeOnlyService();
+      AtomicInteger interruptions = new AtomicInteger();
+      try {
+        TestObserver<P2pStreamingService.TradePublication> first = service.trades("BTC").doOnNext(event -> {
+          if (interruptions.compareAndSet(0, 1)) {
+            service.channel.close(); service.channel.runPendingTasks();
+          }
+        }).test();
+        TestObserver<P2pStreamingService.TradePublication> second = service.trades("BTC").test();
+        service.startTrades(200);
+        service.frame(tradeBatch(1, 200, tradeEvent("BTC", true), tradeEvent("BTC", false)));
+        waitFor(() -> !service.channel.isOpen());
+        awaitWorker(service);
+        assertTradeIds(first, "p2p:trades:200:1:0");
+        assertTradeIds(second, "p2p:trades:200:1:0");
+        assertCursor(service.getTradeCursor(), 200, 0);
+        restartTrades(service, 200);
+        service.frame(tradeBatch(1, 200, tradeEvent("BTC", !changePrefix), tradeEvent("BTC", !changePrefix)));
+        waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
+        awaitWorker(service);
+        assertTrue(service.getLastFailure().getMessage().contains("Trade continuity failure"));
+        assertTrue(service.getLastFailure().getCause().getMessage().contains("differs from interrupted frame"));
+        assertTradeIds(first, "p2p:trades:200:1:0");
+        assertTradeIds(second, "p2p:trades:200:1:0");
+        assertCursor(service.getTradeCursor(), 200, 0);
+        service.connect().test().assertError(IllegalStateException.class);
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void staleGenerationTradeCallbacksCannotPublishAdvanceCursorOrInvalidateReplacement() throws Exception {
+    Harness service = tradeOnlyService();
+    try {
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("BTC").test();
+      service.startTrades(200);
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      awaitWorker(service);
+      long oldGeneration = service.getGeneration();
+      service.channel.close(); service.channel.runPendingTasks();
+      restartTrades(service, 200);
+      long replacement = service.getGeneration();
+      service.binary(oldGeneration, tradeBatch(2, 999, tradeEvent("BTC", false)), 1, System.nanoTime());
+      service.binary(oldGeneration, SyntheticWire.status(3, 1, 999, 0), 1, System.nanoTime());
+      service.binary(oldGeneration, new byte[] {11}, 1, System.nanoTime()); // Stale malformed traffic is not decoded.
+      awaitWorker(service);
+      assertEquals(replacement, service.getGeneration());
+      assertCursor(service.getTradeCursor(), 200, 1);
+      assertTradeIds(trades, "p2p:trades:200:1:0");
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, service.getReadiness());
+      service.frame(tradeBatch(1, 200, tradeEvent("BTC", true)));
+      service.frame(tradeBatch(2, 200, tradeEvent("BTC", false)));
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      awaitWorker(service);
+      assertEquals(replacement, service.getGeneration());
+      assertCursor(service.getTradeCursor(), 200, 2);
+      assertTradeIds(trades, "p2p:trades:200:1:0", "p2p:trades:200:2:0");
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void disconnectDuringTradeDispatchDropsQueuedAndRemainingEventsWithoutCursorCommit() throws Exception {
+    Harness service = tradeOnlyService();
+    CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+    try {
+      TestObserver<P2pStreamingService.TradePublication> first = service.trades("BTC").doOnNext(event -> {
+        entered.countDown();
+        try { release.await(3, TimeUnit.SECONDS); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+      }).test();
+      TestObserver<P2pStreamingService.TradePublication> second = service.trades("BTC").test();
+      service.startTrades(200);
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      awaitWorker(service);
+      long oldGeneration = service.getGeneration();
+      service.frame(tradeBatch(1, 201, tradeEvent("BTC", true), tradeEvent("BTC", false)));
+      assertTrue(entered.await(3, TimeUnit.SECONDS));
+      service.frame(tradeBatch(2, 202, tradeEvent("BTC", true)));
+      assertTrue(service.disconnect().blockingAwait(3, TimeUnit.SECONDS));
+      release.countDown();
+      assertTrue(worker(service).awaitTermination(3, TimeUnit.SECONDS));
+      service.binary(oldGeneration, tradeBatch(3, 999, tradeEvent("BTC", true)), 1, System.nanoTime());
+      service.binary(service.getGeneration(), tradeBatch(1, 999, tradeEvent("BTC", true)), 1, System.nanoTime());
+      assertNotEquals(oldGeneration, service.getGeneration());
+      assertEquals(P2pStreamingService.Readiness.DISCONNECTED, service.getReadiness());
+      assertCursor(service.getTradeCursor(), 200, 0);
+      assertTradeIds(first, "p2p:trades:201:1:0");
+      assertTradeIds(second, "p2p:trades:201:1:0");
+      service.trades("BTC").test().assertNoValues();
+      service.connect().test().assertError(IllegalStateException.class);
+      service.awaitLive().test().awaitDone(3, TimeUnit.SECONDS).assertError(java.io.IOException.class);
+    } finally { release.countDown(); service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void revocationAfterDecodeFencesRecoveryStatusesAndRetention() throws Exception {
+    for (int action = 0; action < 4; action++) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        startCombined(service);
+        service.frame(SyntheticWire.status(0, 1, 101, 0));
+        awaitWorker(service);
+        service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+        service.frame(SyntheticWire.status(3, 1, 101, 0));
+        awaitWorker(service);
+        long token = service.getGeneration();
+        final int selected = action;
+        byte[] bytes = SyntheticWire.status(selected == 2 ? 0 : 3, selected == 1 ? 1 : 2,
+            900, selected == 1 ? 0 : 901);
+        P2pWireCodec.Frame decoded = new P2pWireCodec().decode(bytes);
+        revokePausedWork(service, () -> {
+          if (selected == 3) {
+            java.lang.reflect.Method control = P2pStreamingService.class.getDeclaredMethod("control", String.class, long.class);
+            control.setAccessible(true);
+            control.invoke(service, "{\"channel\":\"errors\",\"code\":\"history_unavailable\",\"stream\":\"trades\",\"oldest_height\":900}", token);
+          } else {
+            java.lang.reflect.Method process = P2pStreamingService.class.getDeclaredMethod("process",
+                P2pWireCodec.Frame.class, int.class, long.class, long.class, long.class);
+            process.setAccessible(true);
+            process.invoke(service, decoded, bytes.length, 1L, System.nanoTime(), System.nanoTime());
+          }
+          return null;
+        });
+        assertCursor(service.getTradeCursor(), 101, 1);
+        assertCursor(service.getCursor(), 101, 0);
+        assertEquals(1, fetches.get());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void revokedBlockCannotInitializeTradeCursor() throws Exception {
+    Harness service = tradeOnlyService();
+    try {
+      service.start();
+      service.negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"trades\":\"on\"}}", 1);
+      int sent = service.sent.size();
+      P2pWireCodec.Frame decoded = new P2pWireCodec().decode(blockHeight(900));
+      revokePausedWork(service, () -> {
+        java.lang.reflect.Method process = P2pStreamingService.class.getDeclaredMethod("process",
+            P2pWireCodec.Frame.class, int.class, long.class, long.class, long.class);
+        process.setAccessible(true);
+        process.invoke(service, decoded, 41, 1L, System.nanoTime(), System.nanoTime());
+        return null;
+      });
+      assertNull(service.getTradeCursor());
+      assertEquals(sent, service.sent.size());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void pluralErrorEnvelopeWithoutSafeAttributionFailsClosed() throws Exception {
+    Harness service = tradeOnlyService();
+    try {
+      service.startTrades(200);
+      service.frame(SyntheticWire.status(3, 1, 200, 0));
+      awaitWorker(service);
+      service.text("{\"channel\":\"errors\",\"message\":\"unspecified failure\"}");
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
+      assertCursor(service.getTradeCursor(), 200, 0);
+    } finally { service.stop(); }
+  }
+
+  private static void revokePausedWork(Harness service, java.util.concurrent.Callable<Void> action) throws Exception {
+    CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+    java.util.concurrent.Future<Void> pending = worker(service).submit(() -> {
+      entered.countDown();
+      assertTrue(release.await(3, TimeUnit.SECONDS));
+      return action.call();
+    });
+    try {
+      assertTrue(entered.await(3, TimeUnit.SECONDS));
+      service.channel.close();
+      service.channel.runPendingTasks();
+      long revoked = service.getGeneration();
+      release.countDown();
+      pending.get(3, TimeUnit.SECONDS);
+      awaitWorker(service);
+      assertEquals("Revoked work must not invalidate its successor", revoked, service.getGeneration());
+    } finally { release.countDown(); }
+  }
+
+  @Test(timeout = 15000) public void revocationAtRecoveryCommitPreservesCursorAndInterruptedPrefix() throws Exception {
+    for (int action = 0; action < 3; action++) {
+      Harness service = tradeOnlyService();
+      try {
+        service.startTrades(200);
+        service.frame(SyntheticWire.status(3, 1, 200, 0));
+        awaitWorker(service);
+        if (action != 1) {
+          TestObserver<P2pStreamingService.TradePublication> interrupt = service.trades("BTC")
+              .doOnNext(event -> service.channel.close()).test();
+          service.frame(tradeBatch(1, 201, tradeEvent("BTC", true), tradeEvent("BTC", false)));
+          awaitWorker(service);
+          interrupt.assertValueCount(1);
+          interrupt.dispose();
+          restartTrades(service, 200);
+          awaitWorker(service);
+        }
+        java.lang.reflect.Field partialField = P2pStreamingService.class.getDeclaredField("partialTrade");
+        partialField.setAccessible(true);
+        Object partial = partialField.get(service);
+        if (action != 1) {
+          assertNotNull(partial);
+          java.lang.reflect.Field prefix = partial.getClass().getDeclaredField("emittedPrefix");
+          prefix.setAccessible(true);
+          assertEquals(1, prefix.getInt(partial));
+        }
+        java.lang.reflect.Field gateField = P2pStreamingService.class.getDeclaredField("stateGate");
+        gateField.setAccessible(true);
+        Object gate = gateField.get(service);
+        long token = service.getGeneration();
+        final int selected = action;
+        java.util.concurrent.atomic.AtomicReference<Thread> runner = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.Future<Void> pending;
+        synchronized (gate) {
+          pending = worker(service).submit(() -> {
+            runner.set(Thread.currentThread());
+            if (selected == 2) {
+              java.lang.reflect.Method control = P2pStreamingService.class.getDeclaredMethod("control", String.class, long.class);
+              control.setAccessible(true);
+              control.invoke(service, "{\"channel\":\"errors\",\"code\":\"history_unavailable\",\"stream\":\"trades\",\"oldest_height\":900}", token);
+            } else {
+              P2pWireCodec.Frame status = new P2pWireCodec().decode(SyntheticWire.status(3,
+                  selected == 1 ? 1 : 2, 900, selected == 1 ? 0 : 901));
+              java.lang.reflect.Method process = P2pStreamingService.class.getDeclaredMethod("process",
+                  P2pWireCodec.Frame.class, int.class, long.class, long.class, long.class);
+              process.setAccessible(true);
+              process.invoke(service, status, 27, 1L, System.nanoTime(), System.nanoTime());
+            }
+            return null;
+          });
+          long owner = Thread.currentThread().getId();
+          waitFor(() -> {
+            Thread thread = runner.get();
+            if (thread == null) return false;
+            java.lang.management.ThreadInfo info = java.lang.management.ManagementFactory
+                .getThreadMXBean().getThreadInfo(thread.getId());
+            return info != null && info.getThreadState() == Thread.State.BLOCKED
+                && info.getLockOwnerId() == owner;
+          });
+          java.lang.reflect.Method invalidate = P2pStreamingService.class.getDeclaredMethod("invalidate",
+              long.class, Throwable.class, boolean.class);
+          invalidate.setAccessible(true);
+          invalidate.invoke(service, token, new java.io.IOException("test commit revocation"), false);
+        }
+        pending.get(3, TimeUnit.SECONDS);
+        awaitWorker(service);
+        assertCursor(service.getTradeCursor(), 200, 0);
+        assertSame("An obsolete boundary must not erase the emitted prefix", partial, partialField.get(service));
+        assertEquals(token + 1, service.getGeneration());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void revokedSnapshotConstructionCannotInitializeTradeCursor() throws Exception {
+    for (boolean stop : new boolean[] {false, true}) {
+      CountDownLatch constructed = new CountDownLatch(1), release = new CountDownLatch(1);
+      P2pWireCodec.Snapshot snapshot = SyntheticWire.seed(100,
+          SyntheticWire.order(1, true, "BTC", "99", "1"), SyntheticWire.order(2, false, "BTC", "100", "1"));
+      java.lang.reflect.Field books = P2pWireCodec.Snapshot.class.getDeclaredField("books");
+      books.setAccessible(true);
+      // Test-only pause after the real replacement books have been constructed, before commit.
+      books.set(snapshot, new java.util.LinkedHashMap<String, List<P2pWireCodec.Change>>(snapshot.books) {
+        @Override public void forEach(java.util.function.BiConsumer<? super String,
+            ? super List<P2pWireCodec.Change>> action) {
+          super.forEach(action);
+          constructed.countDown();
+          boolean interrupted = false;
+          for (;;) {
+            try { assertTrue(release.await(3, TimeUnit.SECONDS)); break; }
+            catch (InterruptedException ignored) { interrupted = true; }
+          }
+          if (interrupted) Thread.currentThread().interrupt();
+        }
+      });
+      Harness service = new Harness(Collections.singleton("BTC"), Collections.singleton("BTC"),
+          (coins, min) -> snapshot, 32);
+      try {
+        TestObserver<Void> preparation = service.connect().test();
+        assertTrue(constructed.await(3, TimeUnit.SECONDS));
+        if (stop) {
+          assertTrue(service.disconnect().blockingAwait(3, TimeUnit.SECONDS));
+        } else {
+          java.lang.reflect.Method invalidate = P2pStreamingService.class.getDeclaredMethod("invalidate",
+              long.class, Throwable.class, boolean.class);
+          invalidate.setAccessible(true);
+          invalidate.invoke(service, service.getGeneration(), new java.io.IOException("revoked seed"), false);
+        }
+        release.countDown();
+        if (stop) assertTrue(worker(service).awaitTermination(3, TimeUnit.SECONDS));
+        else awaitWorker(service);
+        preparation.assertError(java.io.IOException.class);
+        assertNull(service.getCursor());
+        assertNull(service.getTradeCursor());
+        assertTrue(service.sent.isEmpty());
+      } finally { release.countDown(); service.stop(); }
+    }
+  }
+
+  private static Harness combinedService(AtomicInteger fetches) {
+    return new Harness(Collections.singleton("BTC"), Collections.singleton("ETH"), (coins, min) -> {
+      assertEquals(Collections.singleton("BTC"), coins);
+      assertEquals(BigInteger.ZERO, min);
+      fetches.incrementAndGet();
+      return SyntheticWire.seed(100, SyntheticWire.order(1, true, "BTC", "99", "1"),
+          SyntheticWire.order(2, false, "BTC", "100", "1"));
+    }, 32);
+  }
+
+  private static Harness tradeOnlyService() {
+    return new Harness(Collections.emptySet(), Collections.singleton("BTC"), (coins, min) -> {
+      throw new AssertionError("Trade recovery must not request a book snapshot");
+    }, 32);
+  }
+
+  private static void startCombined(Harness service) throws Exception {
+    service.start();
+    service.negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\",\"trades\":\"on\"}}", 2);
+  }
+
+  private static void restartTrades(Harness service, long height) throws Exception {
+    int before = service.sent.size();
+    service.start();
+    service.negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"trades\":\"on\"}}", 2);
+    assertSubscription(service.sent.get(before + 2), "trades", "BTC", height);
+  }
+
+  private static java.lang.reflect.Field field(Object owner, String name) throws Exception {
+    Class<?> type = owner.getClass();
+    while (type != null) {
+      try {
+        java.lang.reflect.Field field = type.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+      } catch (NoSuchFieldException ignored) { type = type.getSuperclass(); }
+    }
+    throw new NoSuchFieldException(name);
+  }
+
+  private static long ingressCount(Harness service, String name) throws Exception {
+    return ((AtomicLong) field(service, name).get(service)).get();
+  }
+
+  private static P2pStreamingService.BinaryHandler handler(Harness service) {
+    P2pStreamingService.BinaryHandler handler =
+        service.channel.pipeline().get(P2pStreamingService.BinaryHandler.class);
+    assertNotNull(handler);
+    return handler;
+  }
+
+  private static BinaryWebSocketFrame heartbeatFrame() {
+    return new BinaryWebSocketFrame(Unpooled.wrappedBuffer(new SyntheticWire.Bytes().u8(0).u64(0).bytes()));
+  }
+
+  private static void checkHealth(Harness service) throws Exception {
+    java.lang.reflect.Method check = P2pStreamingService.class.getDeclaredMethod("checkHealth");
+    check.setAccessible(true);
+    check.invoke(service);
+  }
+
+  private static void assertReleased(Harness service,
+      List<? extends io.netty.handler.codec.http.websocketx.WebSocketFrame> frames) throws Exception {
+    for (io.netty.handler.codec.http.websocketx.WebSocketFrame frame : frames) assertEquals(0, frame.refCnt());
+    assertEquals(0, ingressCount(service, "queuedFrames"));
+    assertEquals(0, ingressCount(service, "queuedBytes"));
+  }
+
+  private static final class ReadProbe extends ChannelOutboundHandlerAdapter {
+    final AtomicInteger reads = new AtomicInteger();
+    @Override public void read(ChannelHandlerContext context) throws Exception {
+      reads.incrementAndGet();
+      super.read(context);
+    }
+  }
+
+  private static final class WorkerBlock implements AutoCloseable {
+    private final CountDownLatch release = new CountDownLatch(1);
+    private final Future<?> task;
+    WorkerBlock(Harness service) throws Exception {
+      CountDownLatch entered = new CountDownLatch(1);
+      task = worker(service).submit(() -> {
+        entered.countDown();
+        try {
+          assertTrue("Timed out waiting to release controlled worker", release.await(3, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+          // shutdownNow is the behavior under test in the stop cleanup case.
+          if (!service.isTerminal()) throw new AssertionError(interrupted);
+          Thread.currentThread().interrupt();
+        }
+      });
+      assertTrue("Worker did not enter controlled block", entered.await(3, TimeUnit.SECONDS));
+    }
+    @Override public void close() throws Exception {
+      release.countDown();
+      task.get(3, TimeUnit.SECONDS);
+    }
+  }
+
+  private static java.util.concurrent.ExecutorService worker(Harness service) throws Exception {
+    java.lang.reflect.Field field = P2pStreamingService.class.getDeclaredField("work");
+    field.setAccessible(true);
+    return (java.util.concurrent.ExecutorService) field.get(service);
+  }
+
+  private static void awaitWorker(Harness service) throws Exception {
+    // A worker fence alone can overtake the next event-loop handoff. Drain both owners first.
+    waitFor(() -> {
+      try {
+        Object handler = service.channel == null ? null
+            : service.channel.pipeline().get(P2pStreamingService.BinaryHandler.class);
+        return ingressCount(service, "queuedFrames") == 0
+            && (handler == null || !field(handler, "handoff").getBoolean(handler));
+      } catch (Exception e) { throw new AssertionError(e); }
+    });
+    worker(service).submit(() -> {}).get(3, TimeUnit.SECONDS);
+    pumpChannels();
+  }
+
+  private static void assertHistoryOwner(Harness service, String expected) throws Exception {
+    awaitWorker(service);
+    java.lang.reflect.Field field = P2pStreamingService.class.getDeclaredField("pendingSubscription");
+    field.setAccessible(true);
+    Object owner = field.get(service);
+    assertEquals(expected, owner == null ? null : owner.toString());
+  }
+
+  private static void assertCursor(P2pStreamingService.Cursor cursor, long height, long frames) {
+    assertNotNull(cursor);
+    assertEquals(BigInteger.valueOf(height), cursor.getHeight());
+    assertEquals(frames, cursor.getFramesAtHeight());
+  }
+
+  private static void assertTradeIds(TestObserver<P2pStreamingService.TradePublication> observer, String... expected) {
+    List<String> actual = new ArrayList<>();
+    for (P2pStreamingService.TradePublication publication : observer.values()) actual.add(publication.id);
+    assertEquals(Arrays.asList(expected), actual);
+    observer.assertNoErrors();
+  }
+
+  private static void assertSubscription(String message, String stream, String coin, long height) throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    com.fasterxml.jackson.databind.node.ObjectNode actual =
+        (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(message);
+    // The documented book command may omit the default stream; trades must be explicit.
+    if ("book".equals(stream) && !actual.has("stream")) actual.put("stream", "book");
+    assertEquals(mapper.readTree("{\"method\":\"subscribe\",\"stream\":\"" + stream
+        + "\",\"coins\":[\"" + coin + "\"],\"from_height\":" + height + "}"), actual);
+  }
+
+  private static SyntheticWire.Encoded tradeEvent(String coin, boolean buy) {
+    SyntheticWire.Encoded buyer = SyntheticWire.tradeSide(new byte[20], BigInteger.ONE, null, null, "0");
+    SyntheticWire.Encoded seller = SyntheticWire.tradeSide(new byte[20], BigInteger.TEN, null, null, "0");
+    return SyntheticWire.trade(new BigInteger("123456789"), buy, null, coin, "10.25", "2.5", "Open", buyer, seller);
+  }
+
+  private static byte[] tradeBatch(long sequence, long height, SyntheticWire.Encoded... events) {
+    return SyntheticWire.trades(BigInteger.valueOf(sequence), BigInteger.ZERO, BigInteger.ZERO,
+        BigInteger.valueOf(height), BigInteger.ZERO, events).bytes;
+  }
+
+  private static byte[] blockHeight(long height) {
+    return SyntheticWire.block(BigInteger.ZERO, BigInteger.valueOf(height), BigInteger.ZERO,
+        BigInteger.ZERO, BigInteger.ZERO).bytes;
+  }
+
+  private static void pumpChannels() {
+    for (Harness harness : ACTIVE_HARNESSES.get()) {
+      for (EmbeddedChannel channel : harness.channelsCreated) {
+        channel.runPendingTasks();
+        channel.runScheduledPendingTasks();
+        channel.checkException();
+      }
+    }
+  }
+
   static void waitFor(BooleanSupplier condition) throws Exception {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-    while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(1);
-    assertTrue("Timed out waiting for deterministic worker condition", condition.getAsBoolean());
+    do {
+      pumpChannels();
+      if (condition.getAsBoolean()) return;
+      Thread.sleep(1);
+    } while (System.nanoTime() < deadline);
+    pumpChannels();
+    assertTrue("Timed out waiting for deterministic worker/event-loop condition", condition.getAsBoolean());
   }
 
   static class Harness extends P2pStreamingService {
     volatile EmbeddedChannel channel;
     final List<String> sent = new CopyOnWriteArrayList<>();
-    final List<EmbeddedChannel> channelsCreated = new ArrayList<>();
+    final List<EmbeddedChannel> channelsCreated = new CopyOnWriteArrayList<>();
     Harness(SnapshotSource snapshots, int capacity) {
       super(URI.create("wss://offline.invalid/ws"), Collections.singleton("BTC"), new P2pWireCodec(), snapshots, capacity);
+      ACTIVE_HARNESSES.get().add(this);
+    }
+    Harness(Set<String> bookCoins, Set<String> tradeCoins, SnapshotSource snapshots, int capacity) {
+      super(URI.create("wss://offline.invalid/ws"), bookCoins, tradeCoins, new P2pWireCodec(), snapshots, capacity);
+      ACTIVE_HARNESSES.get().add(this);
     }
     @Override protected Completable openConnection() {
       return Completable.fromAction(() -> {
         WebSocketClientHandshaker handshaker = mock(WebSocketClientHandshaker.class);
         when(handshaker.isHandshakeComplete()).thenReturn(true);
         WebSocketClientHandler handler = getWebSocketClientHandler(handshaker, this::messageHandler);
-        channel = new EmbeddedChannel(handler);
+        channel = new EmbeddedChannel(new ReadProbe(), handler);
         channelsCreated.add(channel);
       });
     }
@@ -456,12 +1922,39 @@ public class P2pStreamingServiceTest {
       int before = sent.size();
       text(INFO);
       waitFor(() -> sent.size() == before + 2);
+      awaitWorker(this);
     }
-    void text(String text) { channel.writeInbound(new TextWebSocketFrame(text)); }
-    void frame(byte[] bytes) { channel.writeInbound(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(bytes))); }
+    void negotiate(String info, int controls) throws Exception {
+      int before = sent.size();
+      text(info);
+      waitFor(() -> sent.size() == before + controls);
+      awaitWorker(this);
+    }
+    void startTrades(long height) throws Exception {
+      start();
+      negotiate("{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"trades\":\"on\"}}", 1);
+      frame(blockHeight(height));
+      waitFor(() -> sent.size() == 3);
+      assertSubscription(sent.get(2), "trades", "BTC", height);
+    }
+    void text(String text) {
+      pumpChannels();
+      channel.writeInbound(new TextWebSocketFrame(text));
+      pumpChannels();
+    }
+    void frame(byte[] bytes) {
+      pumpChannels();
+      channel.writeInbound(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(bytes)));
+      pumpChannels();
+    }
     void stop() {
-      disconnect().blockingAwait(3, TimeUnit.SECONDS);
-      for (EmbeddedChannel channel : channelsCreated) channel.finishAndReleaseAll();
+      try {
+        disconnect().blockingAwait(3, TimeUnit.SECONDS);
+        for (EmbeddedChannel channel : channelsCreated) {
+          channel.runPendingTasks();
+          channel.finishAndReleaseAll();
+        }
+      } finally { ACTIVE_HARNESSES.get().remove(this); }
     }
   }
 }

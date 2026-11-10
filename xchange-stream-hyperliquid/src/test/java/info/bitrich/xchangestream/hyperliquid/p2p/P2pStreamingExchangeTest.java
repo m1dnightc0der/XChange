@@ -4,10 +4,12 @@ import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
 import info.bitrich.xchangestream.core.ProductSubscription;
-import info.bitrich.xchangestream.core.StreamingMarketDataService;
 import info.bitrich.xchangestream.hyperliquid.HyperliquidStreamingExchange;
 import io.reactivex.rxjava3.core.Completable;
-import io.reactivex.rxjava3.core.Observable;
+import io.reactivex.rxjava3.observers.TestObserver;
+import io.reactivex.rxjava3.subjects.PublishSubject;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.util.Collections;
 import java.util.HashSet;
@@ -43,7 +45,6 @@ public class P2pStreamingExchangeTest {
     assertThrows(IllegalArgumentException.class, () -> P2pHyperliquidStreamingExchange.membership());
     for (ProductSubscription invalid : new ProductSubscription[] {
         ProductSubscription.create().build(),
-        ProductSubscription.create().addTrades(BTC).build(),
         ProductSubscription.create().addOrderbook(CurrencyPair.BTC_USD).build(),
         ProductSubscription.create().addOrderbook(new FuturesContract("BTC/USDC/202612" )).build(),
         ProductSubscription.create().addOrderbook(BTC).addOrders(BTC).build(),
@@ -70,67 +71,141 @@ public class P2pStreamingExchangeTest {
     assertThrows(UnsupportedOperationException.class, exchange::getStreamingAccountService);
   }
 
-  @Test public void independentNativePublicTradesKeepNativeUrisAndNeverReceiveBooksOrCredentials() {
+  @Test public void booksAndTradesUseOneP2pServiceAndKeepNativeRestConfiguration() {
+    TestExchange exchange = configured(true);
+    ProductSubscription products = ProductSubscription.create().addOrderbook(BTC).addTicker(ETH)
+        .addTrades(BTC).build();
+    exchange.connect(products).test().assertComplete();
+    assertEquals(new HashSet<>(java.util.Arrays.asList("BTC", "ETH")), exchange.getSubscribedCoins());
+    assertEquals(new HashSet<>(java.util.Arrays.asList("BTC", "ETH")), exchange.bookCoins);
+    assertEquals(Collections.singleton("BTC"), exchange.tradeCoins);
+    assertEquals("wss://p2p.invalid/ws", exchange.websocket.toString());
+    assertEquals("wss://native-public.invalid/ws", exchange.getExchangeSpecification().getOverrideWebsocketApiUri());
+    assertFalse(exchange.getExchangeSpecification().getSslUri().contains("p2p"));
+    for (java.lang.reflect.Field field : P2pHyperliquidStreamingExchange.class.getDeclaredFields()) {
+      assertFalse("No native public delegate", HyperliquidStreamingExchange.class.isAssignableFrom(field.getType()));
+    }
+    exchange.connect(products).test().assertComplete();
+    verify(exchange.stub, times(1)).connect();
+    exchange.connect(ProductSubscription.create().addOrderbook(BTC).build()).test()
+        .assertError(IllegalArgumentException.class);
+    exchange.getStreamingMarketDataService().getOrderBook(new FuturesContract("SOL/USDC/PERP"))
+        .test().assertError(IllegalArgumentException.class);
+    exchange.getStreamingMarketDataService().getTrades(ETH).test().assertError(IllegalArgumentException.class);
+    exchange.disconnect().test().assertComplete();
+    verify(exchange.stub).disconnect();
+  }
+
+  @Test public void tradeOnlyNeedsNoSnapshotAndSeparateMembershipIsEnforced() {
+    TestExchange exchange = configured(false);
+    exchange.connect(ProductSubscription.create().addTrades(ETH).build()).test().assertComplete();
+    assertTrue(exchange.bookCoins.isEmpty());
+    assertEquals(Collections.singleton("ETH"), exchange.tradeCoins);
+    assertNull(exchange.snapshots);
+    assertEquals(Collections.singleton("ETH"), exchange.getSubscribedCoins());
+    exchange.getStreamingMarketDataService().getOrderBook(ETH).test().assertError(IllegalArgumentException.class);
+    exchange.getStreamingMarketDataService().getTicker(ETH).test().assertError(IllegalArgumentException.class);
+    exchange.getStreamingMarketDataService().getTrades(BTC).test().assertError(IllegalArgumentException.class);
+    exchange.disconnect().test().assertComplete();
+  }
+
+  @Test public void p2pTradesAdaptExactSignedValuesEventTimeIdsAndObserverIsolation() throws Exception {
+    TestExchange exchange = configured(false);
+    exchange.connect(ProductSubscription.create().addTrades(BTC).build()).test().assertComplete();
+    PublishSubject<P2pStreamingService.TradePublication> events = PublishSubject.create();
+    when(exchange.stub.trades("BTC")).thenReturn(events);
+    TestObserver<Trade> first = exchange.getStreamingMarketDataService().getTrades(BTC).test();
+    TestObserver<Trade> second = exchange.getStreamingMarketDataService().getTrades(BTC).test();
+    P2pWireCodec.TradeSide side = new P2pWireCodec.TradeSide("00", BigInteger.ONE, null, null, BigDecimal.ZERO);
+    java.lang.reflect.Constructor<P2pStreamingService.TradePublication> publication =
+        P2pStreamingService.TradePublication.class.getDeclaredConstructor(String.class, P2pWireCodec.TradeEvent.class);
+    publication.setAccessible(true);
+    for (int i = 0; i < 2; i++) {
+      P2pWireCodec.TradeEvent event = new P2pWireCodec.TradeEvent(BigInteger.valueOf(1234567890),
+          i == 0, null, "BTC", new BigDecimal("12.345678901"), new BigDecimal("0.00012345"),
+          "Na", side, side);
+      events.onNext(publication.newInstance("p2p:trades:101:1:" + i, event));
+    }
+    first.assertValueCount(2); second.assertValueCount(2);
+    Trade buy = first.values().get(0), sell = first.values().get(1);
+    assertEquals(org.knowm.xchange.dto.Order.OrderType.BID, buy.getType());
+    assertEquals(org.knowm.xchange.dto.Order.OrderType.ASK, sell.getType());
+    assertEquals(new BigDecimal("0.00012345"), buy.getOriginalAmount());
+    assertEquals(new BigDecimal("-0.00012345"), sell.getOriginalAmount());
+    assertEquals(new BigDecimal("12.345678901"), sell.getPrice());
+    assertEquals(1234567L, buy.getTimestamp().getTime());
+    assertEquals("p2p:trades:101:1:0", buy.getId());
+    assertEquals("p2p:trades:101:1:1", sell.getId());
+    assertEquals(BTC, sell.getInstrument());
+    assertNotSame(buy, second.values().get(0));
+    buy.getTimestamp().setTime(0);
+    assertEquals(1234567L, second.values().get(0).getTimestamp().getTime());
+    first.dispose();
+    exchange.getStreamingMarketDataService().getTrades(BTC).test().assertNoValues();
+    exchange.disconnect().test().assertComplete();
+  }
+
+  @Test public void tickerOnlyUsesBookMembershipAndCannotRequestTrades() {
+    TestExchange exchange = configured(true);
+    exchange.connect(ProductSubscription.create().addTicker(BTC).build()).test().assertComplete();
+    assertEquals(Collections.singleton("BTC"), exchange.bookCoins);
+    assertTrue(exchange.tradeCoins.isEmpty());
+    assertNotNull(exchange.snapshots);
+    when(exchange.stub.book("BTC")).thenReturn(io.reactivex.rxjava3.core.Observable.never());
+    TestObserver<org.knowm.xchange.dto.marketdata.Ticker> ticker =
+        exchange.getStreamingMarketDataService().getTicker(BTC).test();
+    ticker.assertNoErrors().assertNoValues();
+    exchange.getStreamingMarketDataService().getTrades(BTC).test()
+        .assertError(IllegalArgumentException.class);
+    verify(exchange.stub, never()).trades(anyString());
+    ticker.dispose();
+    exchange.disconnect().test().assertComplete();
+  }
+
+  @Test public void bookMembershipStillRequiresSnapshotEndpoint() {
+    TestExchange exchange = configured(false);
+    exchange.connect(ProductSubscription.create().addOrderbook(BTC).build()).test()
+        .assertError(IllegalArgumentException.class);
+    assertNull(exchange.stub);
+  }
+
+  private static TestExchange configured(boolean snapshot) {
     TestExchange exchange = new TestExchange();
     ExchangeSpecification spec = exchange.getDefaultExchangeSpecification();
     spec.setShouldLoadRemoteMetaData(false);
     spec.setOverrideWebsocketApiUri("wss://native-public.invalid/ws");
     spec.setExchangeSpecificParametersItem(P2pHyperliquidStreamingExchange.P2P_WS_URI, "wss://p2p.invalid/ws");
-    spec.setExchangeSpecificParametersItem(P2pHyperliquidStreamingExchange.P2P_SNAPSHOT_URI, "https://snapshot.invalid/book");
+    if (snapshot) spec.setExchangeSpecificParametersItem(P2pHyperliquidStreamingExchange.P2P_SNAPSHOT_URI,
+        "https://snapshot.invalid/book");
     exchange.applySpecification(spec);
-    ProductSubscription products = ProductSubscription.create().addOrderbook(BTC).addTicker(ETH).addTrades(BTC).build();
-    exchange.connect(products).test().assertComplete();
-    assertEquals(new HashSet<>(java.util.Arrays.asList("BTC", "ETH")), exchange.getSubscribedCoins());
-    assertEquals("wss://p2p.invalid/ws", exchange.websocket.toString());
-    assertEquals("wss://native-public.invalid/ws", exchange.nativeDelegate.spec.getOverrideWebsocketApiUri());
-    assertFalse(exchange.getExchangeSpecification().getSslUri().contains("p2p"));
-    assertFalse(exchange.nativeDelegate.spec.getSslUri().contains("p2p"));
-    assertNull(exchange.nativeDelegate.spec.getApiKey());
-    assertNull(exchange.nativeDelegate.spec.getSecretKey());
-    assertNull(exchange.nativeDelegate.spec.getExchangeSpecificParametersItem(P2pHyperliquidStreamingExchange.P2P_WS_URI));
-    assertEquals(Collections.singletonList(BTC), exchange.nativeDelegate.subscription.getTrades());
-    assertTrue(exchange.nativeDelegate.subscription.getOrderBook().isEmpty());
-    assertTrue(exchange.nativeDelegate.subscription.getTicker().isEmpty());
-    when(exchange.nativeDelegate.market.getTrades(BTC)).thenReturn(Observable.<Trade>empty());
-    exchange.getStreamingMarketDataService().getTrades(BTC).test().assertComplete();
-    verify(exchange.nativeDelegate.market).getTrades(BTC);
-    exchange.connect(ProductSubscription.create().addOrderbook(BTC).build()).test()
-        .assertError(IllegalArgumentException.class);
-    exchange.getStreamingMarketDataService().getOrderBook(new FuturesContract("SOL/USDC/PERP"))
-        .test().assertError(IllegalArgumentException.class);
-    exchange.disconnect().test().assertComplete();
-    verify(exchange.stub).disconnect();
-    assertTrue(exchange.nativeDelegate.disconnected);
+    return exchange;
   }
 
   private static final class TestExchange extends P2pHyperliquidStreamingExchange {
-    final FakeNative nativeDelegate = new FakeNative();
     P2pStreamingService stub;
     URI websocket;
-    @Override protected HyperliquidStreamingExchange createPublicDelegate() { return nativeDelegate; }
+    Set<String> bookCoins, tradeCoins;
+    P2pSnapshotClient snapshots;
     @Override protected P2pStreamingService createP2pService(URI websocket, Set<String> coins, P2pSnapshotClient snapshots) {
+      return createP2pService(websocket, coins, Collections.emptySet(), snapshots);
+    }
+    @Override protected P2pStreamingService createP2pService(URI websocket, Set<String> books,
+        Set<String> trades, P2pSnapshotClient snapshots) {
       this.websocket = websocket;
+      this.bookCoins = books;
+      this.tradeCoins = trades;
+      this.snapshots = snapshots;
+      Set<String> union = new HashSet<>(books);
+      union.addAll(trades);
       stub = mock(P2pStreamingService.class);
-      when(stub.getSubscribedCoins()).thenReturn(coins);
+      when(stub.getSubscribedCoins()).thenReturn(union);
+      when(stub.getBookCoins()).thenReturn(books);
+      when(stub.getTradeCoins()).thenReturn(trades);
       when(stub.getReadiness()).thenReturn(P2pStreamingService.Readiness.LIVE);
       when(stub.connect()).thenReturn(Completable.complete());
       when(stub.awaitLive()).thenReturn(Completable.complete());
       when(stub.disconnect()).thenReturn(Completable.complete());
       return stub;
     }
-  }
-
-  private static final class FakeNative extends HyperliquidStreamingExchange {
-    ExchangeSpecification spec;
-    ProductSubscription subscription;
-    boolean disconnected;
-    final StreamingMarketDataService market = mock(StreamingMarketDataService.class);
-    @Override public void applySpecification(ExchangeSpecification spec) { this.spec = spec; }
-    @Override public Completable connect(ProductSubscription... subscriptions) {
-      subscription = subscriptions[0];
-      return Completable.complete();
-    }
-    @Override public Completable disconnect() { disconnected = true; return Completable.complete(); }
-    @Override public StreamingMarketDataService getStreamingMarketDataService() { return market; }
   }
 }

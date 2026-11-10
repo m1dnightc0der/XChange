@@ -124,7 +124,7 @@ public final class P2pOrderBook {
       List<LimitOrder> result = new ArrayList<>();
       levels.forEach((price, size) -> result.add(new LimitOrder(side, size, instrument, null,
           new Date(receivedAtMicros / 1000), price)));
-      return Collections.unmodifiableList(result);
+      return result;
     }
 
     public Ticker toTicker(Instrument instrument) {
