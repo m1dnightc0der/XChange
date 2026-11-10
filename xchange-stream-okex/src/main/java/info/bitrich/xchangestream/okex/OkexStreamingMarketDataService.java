@@ -27,13 +27,19 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
   private static final Logger LOG = LoggerFactory.getLogger(OkexStreamingMarketDataService.class);
 
   private final OkexStreamingService service;
+  private final String defaultOrderBookChannel;
 
   private final ObjectMapper mapper = StreamingObjectMapperHelper.getObjectMapper();
   private final Map<Instrument, PublishSubject<List<OrderBookUpdate>>>
       orderBookUpdatesSubscriptions;
 
   public OkexStreamingMarketDataService(OkexStreamingService service) {
+    this(service, false);
+  }
+
+  public OkexStreamingMarketDataService(OkexStreamingService service, boolean useBooks50) {
     this.service = service;
+    this.defaultOrderBookChannel = useBooks50 ? ORDERBOOK50 : ORDERBOOK;
     this.orderBookUpdatesSubscriptions = new ConcurrentHashMap<>();
   }
 
@@ -98,12 +104,21 @@ public class OkexStreamingMarketDataService implements StreamingMarketDataServic
   @Override
   public Observable<OrderBook> getOrderBook(Instrument instrument, Object... args) {
     String instId = OkexAdapters.adaptInstrument(instrument);
-    String channelName = args.length >= 1 ? args[0].toString() : "books";
+    String channelName = args.length >= 1 ? args[0].toString() : defaultOrderBookChannel;
     String channelUniqueId = channelName + instId;
     AtomicLong orderBookUpdateIdPrev = new AtomicLong();
     return service
         .subscribeChannel(channelUniqueId)
-        .filter(message -> message.has("action"))
+        .filter(
+            message -> {
+              if (ORDERBOOK50.equals(channelName)
+                  && "error".equals(message.path("event").asText())) {
+                throw OkexAdapters.adaptError(
+                    message.path("code").asText("unknown"),
+                    message.path("msg").asText("Unknown error"));
+              }
+              return message.has("action");
+            })
         .flatMap(
             jsonNode -> {
               // "books5" channel pushes 5 depth levels every time.

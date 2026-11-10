@@ -82,9 +82,47 @@ public final class P2pOrderBook {
 
   public int getOrderCount() { return ordersById.size(); }
 
-  public View snapshot(long receivedAtMicros, long receivedAtNanos) {
+  /** Standalone creation-time snapshot without a validated stream ordering token. */
+  public View snapshot(long createdAtMicros, long receivedAtNanos) {
+    return snapshot(BigInteger.valueOf(createdAtMicros), receivedAtNanos, null, 0);
+  }
+
+  View snapshot(BigInteger createdAtMicros, long receivedAtNanos,
+      BigInteger blockHeight, long framesAtHeight) {
     validate();
-    return new View(coin, bids, asks, receivedAtMicros, receivedAtNanos);
+    if (createdAtMicros != null) P2pWireCodec.unsigned(createdAtMicros);
+    if (blockHeight == null) {
+      if (framesAtHeight != 0) throw new IllegalArgumentException("Cursor height missing");
+    } else {
+      P2pWireCodec.unsigned(blockHeight);
+      if (createdAtMicros == null || framesAtHeight <= 0) {
+        throw new IllegalArgumentException("Cursor requires an applied diff and block time");
+      }
+    }
+    return new View(coin, bids, asks, createdAtMicros, receivedAtNanos, blockHeight, framesAtHeight);
+  }
+
+  /**
+   * Exchange creation time with immutable, validated per-coin stream provenance.
+   * Date remains mutable for DTO compatibility; consumers must verify its milliseconds against
+   * getCreatedAtMicros() before using the ordering token.
+   */
+  public static final class BlockTimestamp extends Date {
+    private static final long serialVersionUID = 1L;
+    private final BigInteger createdAtMicros;
+    private final BigInteger blockHeight;
+    private final long framesAtHeight;
+
+    private BlockTimestamp(BigInteger createdAtMicros, BigInteger blockHeight, long framesAtHeight) {
+      super(createdAtMicros.divide(BigInteger.valueOf(1000)).longValueExact());
+      this.createdAtMicros = createdAtMicros;
+      this.blockHeight = blockHeight;
+      this.framesAtHeight = framesAtHeight;
+    }
+
+    public BigInteger getCreatedAtMicros() { return createdAtMicros; }
+    public BigInteger getBlockHeight() { return blockHeight; }
+    public long getFramesAtHeight() { return framesAtHeight; }
   }
 
   private static final class Entry {
@@ -103,19 +141,31 @@ public final class P2pOrderBook {
     public final String coin;
     public final NavigableMap<BigDecimal, BigDecimal> bids;
     public final NavigableMap<BigDecimal, BigDecimal> asks;
-    public final long receivedAtMicros;
+    public final BigInteger createdAtMicros;
     public final long receivedAtNanos;
+    private final BigInteger blockHeight;
+    private final long framesAtHeight;
     private View(String coin, NavigableMap<BigDecimal, BigDecimal> bids,
-        NavigableMap<BigDecimal, BigDecimal> asks, long micros, long nanos) {
+        NavigableMap<BigDecimal, BigDecimal> asks, BigInteger micros, long nanos,
+        BigInteger blockHeight, long framesAtHeight) {
       this.coin = coin;
       this.bids = Collections.unmodifiableNavigableMap(new TreeMap<>(bids));
       this.asks = Collections.unmodifiableNavigableMap(new TreeMap<>(asks));
-      this.receivedAtMicros = micros;
+      this.createdAtMicros = micros;
       this.receivedAtNanos = nanos;
+      this.blockHeight = blockHeight;
+      this.framesAtHeight = framesAtHeight;
+    }
+
+    private Date timestamp() {
+      if (createdAtMicros == null) return null;
+      return blockHeight == null
+          ? new Date(createdAtMicros.divide(BigInteger.valueOf(1000)).longValueExact())
+          : new BlockTimestamp(createdAtMicros, blockHeight, framesAtHeight);
     }
 
     public OrderBook toOrderBook(Instrument instrument) {
-      return new OrderBook(new Date(receivedAtMicros / 1000),
+      return new OrderBook(timestamp(),
           levels(asks, OrderType.ASK, instrument), levels(bids, OrderType.BID, instrument));
     }
 
@@ -123,13 +173,13 @@ public final class P2pOrderBook {
         Instrument instrument) {
       List<LimitOrder> result = new ArrayList<>();
       levels.forEach((price, size) -> result.add(new LimitOrder(side, size, instrument, null,
-          new Date(receivedAtMicros / 1000), price)));
+          timestamp(), price)));
       return result;
     }
 
     public Ticker toTicker(Instrument instrument) {
       Ticker.Builder builder = new Ticker.Builder().instrument(instrument)
-          .timestamp(new Date(receivedAtMicros / 1000));
+          .timestamp(timestamp());
       if (!bids.isEmpty()) builder.bid(bids.firstKey()).bidSize(bids.firstEntry().getValue());
       if (!asks.isEmpty()) builder.ask(asks.firstKey()).askSize(asks.firstEntry().getValue());
       return builder.build();

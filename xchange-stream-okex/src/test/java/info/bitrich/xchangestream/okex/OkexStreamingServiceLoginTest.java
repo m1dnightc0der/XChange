@@ -115,6 +115,146 @@ public class OkexStreamingServiceLoginTest {
     assertEquals(payload, service.sanitizeForLogging(payload));
   }
 
+  @Test
+  public void books50SubscriptionWaitsForLoginAcknowledgement() throws Exception {
+    assertSubscriptionWaitsForLogin(OkexStreamingService.ORDERBOOK50 + "BTC-USDT-SWAP");
+  }
+
+  @Test
+  public void privateSubscriptionsStillWaitForLoginAcknowledgement() throws Exception {
+    assertSubscriptionWaitsForLogin(OkexStreamingService.USERTRADES);
+    assertSubscriptionWaitsForLogin(OkexStreamingService.USERFILLS);
+  }
+
+  @Test
+  public void anonymousPublicChannelsDoNotRequestLogin() throws Exception {
+    TestableOkexStreamingService observed = spy(service);
+    for (String channel : new String[] {"books", "books5", "tickers", "trades"}) {
+      JsonNode message = objectMapper.readTree(observed.getSubscribeMessage(channel + "BTC-USDT"));
+      assertEquals(channel, message.path("args").get(0).path("channel").asText());
+    }
+    verify(observed, never()).login();
+  }
+
+  @Test
+  public void authenticatedBooks50SubscriptionReusesCompletedLogin() throws Exception {
+    OkexStreamingService observed = spy(new OkexStreamingService("wss://test.okex.com", exchangeSpec));
+    observed.isLoggedIn = true;
+
+    JsonNode message = objectMapper.readTree(
+        observed.getSubscribeMessage(OkexStreamingService.ORDERBOOK50 + "BTC-USDT-SWAP"));
+
+    assertEquals(OkexStreamingService.ORDERBOOK50,
+        message.path("args").get(0).path("channel").asText());
+    assertEquals("BTC-USDT-SWAP", message.path("args").get(0).path("instId").asText());
+    verify(observed, times(1)).login();
+    verify(observed, never()).sendMessage(anyString());
+  }
+
+  @Test
+  public void concurrentBooks50AndPrivateSubscriptionsReuseRealLoginFuture() throws Exception {
+    OkexStreamingService observed = spy(new OkexStreamingService("wss://test.okex.com", exchangeSpec));
+    io.netty.channel.ChannelFuture write = mock(io.netty.channel.ChannelFuture.class);
+    when(write.sync()).thenReturn(write);
+    doReturn(write).when(observed).sendMessage(anyString());
+    // This unit test isolates the real login future; loopback tests exercise actual replay.
+    doNothing().when(observed).resubscribeChannels();
+    CompletableFuture<Void> pending = observed.login();
+    assertSame(pending, observed.login());
+    CountDownLatch entered = new CountDownLatch(3);
+    doAnswer(invocation -> {
+      Object result = invocation.callRealMethod();
+      entered.countDown();
+      return result;
+    }).when(observed).login();
+    ExecutorService executor = Executors.newFixedThreadPool(3);
+    try {
+      Future<String> first = executor.submit(() ->
+          observed.getSubscribeMessage(OkexStreamingService.ORDERBOOK50 + "BTC-USDT-SWAP"));
+      Future<String> second = executor.submit(() ->
+          observed.getSubscribeMessage(OkexStreamingService.ORDERBOOK50 + "ETH-USDT"));
+      Future<String> orders = executor.submit(() ->
+          observed.getSubscribeMessage(OkexStreamingService.USERTRADES));
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+      assertFalse(first.isDone());
+      assertFalse(second.isDone());
+      assertFalse(orders.isDone());
+      verify(observed, times(1)).sendMessage(anyString());
+
+      observed.messageHandler("{\"event\":\"login\",\"code\":\"0\",\"msg\":\"\"}");
+
+      assertTrue(pending.isDone());
+      assertFalse(pending.isCompletedExceptionally());
+      for (Future<String> subscription : java.util.Arrays.asList(first, second, orders)) {
+        assertEquals("subscribe", objectMapper.readTree(subscription.get(2, TimeUnit.SECONDS))
+            .path("op").asText());
+      }
+      verify(observed, times(1)).sendMessage(anyString());
+    } finally {
+      pending.completeExceptionally(new IllegalStateException("test cleanup"));
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  public void reconnectOwnedLoginAcknowledgementDoesNotReplayTwice() throws Exception {
+    TestableOkexStreamingService observed = spy(service);
+    observed.replayOwnedByRecovery = true;
+    CompletableFuture<Void> pending = new CompletableFuture<>();
+    observed.setLoginFuture(pending);
+
+    observed.messageHandler("{\"event\":\"login\",\"code\":\"0\",\"msg\":\"\"}");
+
+    assertTrue(pending.isDone());
+    assertFalse(pending.isCompletedExceptionally());
+    assertTrue(observed.isLoggedIn);
+    verify(observed, never()).resubscribeChannels();
+    // A duplicate ACK arriving after the tracked replay finishes must not replay again.
+    observed.replayOwnedByRecovery = false;
+    observed.messageHandler("{\"event\":\"login\",\"code\":\"0\",\"msg\":\"\"}");
+    verify(observed, never()).resubscribeChannels();
+  }
+
+  @Test
+  public void standaloneLoginRetainsOneReplayAndIgnoresDuplicateAcknowledgement() throws Exception {
+    TestableOkexStreamingService observed = spy(service);
+    observed.setLoginFuture(new CompletableFuture<>());
+
+    observed.messageHandler("{\"event\":\"login\",\"code\":\"0\",\"msg\":\"\"}");
+    observed.messageHandler("{\"event\":\"login\",\"code\":\"0\",\"msg\":\"\"}");
+
+    verify(observed, times(1)).resubscribeChannels();
+  }
+
+  private void assertSubscriptionWaitsForLogin(String channel) throws Exception {
+    TestableOkexStreamingService observed = spy(service);
+    CompletableFuture<Void> pending = new CompletableFuture<>();
+    CountDownLatch loginRequested = new CountDownLatch(1);
+    doAnswer(invocation -> {
+      loginRequested.countDown();
+      return pending;
+    }).when(observed).login();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<String> subscription = executor.submit(() -> observed.getSubscribeMessage(channel));
+      assertTrue("subscription must enter the shared login gate",
+          loginRequested.await(2, TimeUnit.SECONDS));
+      try {
+        subscription.get(150, TimeUnit.MILLISECONDS);
+        fail("subscription must not be produced before login acknowledgement");
+      } catch (TimeoutException expected) {
+        // The existing bounded login wait must still be pending.
+      }
+      pending.complete(null);
+      JsonNode message = objectMapper.readTree(subscription.get(2, TimeUnit.SECONDS));
+      assertEquals("subscribe", message.path("op").asText());
+      verify(observed, times(1)).login();
+    } finally {
+      pending.completeExceptionally(new IllegalStateException("test cleanup"));
+      executor.shutdownNow();
+    }
+  }
+
   // ==================== login() Tests ====================
 
   @Test
@@ -383,7 +523,13 @@ public class OkexStreamingServiceLoginTest {
    */
   static class TestableOkexStreamingService extends OkexStreamingService {
     private boolean skipActualLogin = true;
+    private boolean replayOwnedByRecovery;
     private String lastSanitizedMessage;
+
+    @Override
+    protected boolean isReconnectInProgress() {
+      return replayOwnedByRecovery;
+    }
 
     public TestableOkexStreamingService(String apiUrl, ExchangeSpecification exchangeSpecification) {
       super(apiUrl, exchangeSpecification);

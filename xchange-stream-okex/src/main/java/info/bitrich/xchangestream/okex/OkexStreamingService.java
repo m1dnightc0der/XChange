@@ -183,6 +183,17 @@ public class OkexStreamingService extends JsonNettyStreamingService {
 
 
 
+  @Override
+  protected Completable prepareForResubscription() {
+    return Completable.defer(() -> {
+      if (xSpec.getApiKey() == null || isLoggedIn) {
+        return Completable.complete();
+      }
+      // Reuse the existing login future and bound; the recovery owner handles replay.
+      return Completable.fromCompletionStage(login()).timeout(10, TimeUnit.SECONDS);
+    });
+  }
+
   @Override public void resubscribeChannels() throws IOException {
     LOG.debug("okx resubscribeChannels : called from {}", Thread.currentThread().getStackTrace()[2]);
 
@@ -298,19 +309,24 @@ public class OkexStreamingService extends JsonNettyStreamingService {
     if (jsonNode.has("event") && jsonNode.get("event").textValue().equals("login")) {
       String loginCode = jsonNode.has("code") ? jsonNode.get("code").asText() : null;
       if ("0".equals(loginCode)) {
+        // Capture ownership before completing the future: completion may advance recovery.
+        // Standalone login retains its replay, but duplicate ACKs must not replay again.
+        boolean replayOnLogin = !isLoggedIn && !isReconnectInProgress();
         isLoggedIn = true;
         LOG.info("OKX private websocket login succeeded");
 
-        // Complete the login future
+        // Complete the existing login future; recovery preparation observes the same future.
         CompletableFuture<Void> future = loginFuture.get();
         if (future != null) {
           future.complete(null);
         }
 
-        try {
-          resubscribeChannels();
-        } catch (IOException e) {
-          throw new RuntimeException(e);
+        if (replayOnLogin) {
+          try {
+            resubscribeChannels();
+          } catch (IOException e) {
+            throw new RuntimeException(e);
+          }
         }
       } else if (loginCode != null) {
         String loginMsg = jsonNode.has("msg") ? jsonNode.get("msg").asText() : "Login failed";
@@ -475,7 +491,9 @@ public class OkexStreamingService extends JsonNettyStreamingService {
 
   @Override
   public String getSubscribeMessage(String channelName, Object... args) throws IOException {
-    if (channelName.equals(USERTRADES) || channelName.equals(USERFILLS)) {
+    if (channelName.equals(USERTRADES)
+        || channelName.equals(USERFILLS)
+        || channelName.startsWith(ORDERBOOK50)) {
       try {
         login().get(10, TimeUnit.SECONDS);
       } catch (Exception e) {

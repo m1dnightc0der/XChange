@@ -31,6 +31,7 @@ import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Observable;
 import io.reactivex.rxjava3.core.ObservableEmitter;
 import io.reactivex.rxjava3.disposables.SerialDisposable;
+import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import io.reactivex.rxjava3.subjects.Subject;
 import org.slf4j.Logger;
@@ -346,6 +347,23 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
         });
     }
 
+    /**
+     * Completes exchange-specific preparation before automatic subscription replay.
+     * Called after the full connect chain, off the inbound event loop and without reconnectLock.
+     * Cancellation disposes this stage as part of the existing recovery attempt.
+     */
+    protected Completable prepareForResubscription() {
+        return Completable.complete();
+    }
+
+    /** Whether the tracked automatic recovery owns subscription replay. */
+    protected boolean isReconnectInProgress() {
+        synchronized (reconnectLock) {
+            return reconnectFuture != null && !reconnectFuture.isDone()
+                    && autoReconnect && !isManualDisconnect.get();
+        }
+    }
+
     private CompletableFuture<Void> scheduleReconnect() {
         synchronized (reconnectLock) {
             if (reconnectFuture != null && !reconnectFuture.isDone()) {
@@ -398,25 +416,43 @@ public abstract class NettyStreamingService<T> extends ConnectableService {
                         SerialDisposable attempt = new SerialDisposable();
                         reconnectSubscription = attempt;
                         attempt.set(Completable.defer(this::connect)
-                                .andThen(Completable.fromAction(() -> {
+                                .observeOn(Schedulers.io())
+                                .andThen(Completable.defer(() -> {
+                                    final long generation;
+                                    final Channel replayChannel;
                                     synchronized (reconnectLock) {
                                         if (!canRetry(future) || !isSocketOpen()) {
                                             throw new CancellationException("Recovery connection closed");
                                         }
-                                        resubscribeChannels();
-                                        // A close can race an asynchronous exchange completion hook.
-                                        // Replay and owner completion are one critical section: an
-                                        // inactive callback must either join a retrying owner or start
-                                        // a new one, never join an owner about to falsely succeed.
-                                        if (!isSocketOpen()) {
-                                            throw new ClosedChannelException();
-                                        }
-                                        LOG.info("Resubscription complete service={} role={} generation={} channels={}",
-                                                getClass().getSimpleName(), connectionRole(),
-                                                connectionGeneration, channels.size());
-                                        connectionSuccessEmitters.onNext(new Object());
-                                        future.complete(null);
+                                        generation = connectionGeneration;
+                                        replayChannel = webSocketChannel;
                                     }
+                                    // Authentication can require inbound frames. Never wait for it
+                                    // on the inbound event loop or while holding the recovery lock.
+                                    return prepareForResubscription()
+                                            .observeOn(Schedulers.io())
+                                            .andThen(Completable.fromAction(() -> {
+                                                synchronized (reconnectLock) {
+                                                    if (!canRetry(future)
+                                                            || generation != connectionGeneration
+                                                            || replayChannel != webSocketChannel
+                                                            || !isSocketOpen()) {
+                                                        throw new CancellationException("Recovery connection closed");
+                                                    }
+                                                    resubscribeChannels();
+                                                    // Replay and owner completion retain one fence:
+                                                    // a close must join a retrying owner, never one
+                                                    // about to report a closed connection as recovered.
+                                                    if (!isSocketOpen()) {
+                                                        throw new ClosedChannelException();
+                                                    }
+                                                    LOG.info("Resubscription complete service={} role={} generation={} channels={}",
+                                                            getClass().getSimpleName(), connectionRole(),
+                                                            connectionGeneration, channels.size());
+                                                    connectionSuccessEmitters.onNext(new Object());
+                                                    future.complete(null);
+                                                }
+                                            }));
                                 }))
                                 .subscribe(() -> {}, error -> {
                                     synchronized (reconnectLock) {

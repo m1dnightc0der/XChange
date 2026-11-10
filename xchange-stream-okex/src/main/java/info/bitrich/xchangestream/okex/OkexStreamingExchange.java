@@ -11,6 +11,9 @@ import org.knowm.xchange.exceptions.NotYetImplementedForExchangeException;
 import org.knowm.xchange.okex.OkexExchange;
 
 public class OkexStreamingExchange extends OkexExchange implements StreamingExchange {
+  public static final String PARAM_USE_BOOKS50 = "Use_Books50";
+  public static final String PARAM_PUBLIC_WEBSOCKET = "Public_WebSocket";
+
   // Production URIs
   public static final String WS_PUBLIC_URI = "wss://ws.okx.com:443";
   public static final String WS_PUBLIC_PATH = "/ws/v5/public";
@@ -80,7 +83,10 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
 
     // Create streaming services ONCE during initialization
     this.streamingService = new OkexStreamingService(getApiUrl(), this.exchangeSpecification);
-    this.streamingMarketDataService = new OkexStreamingMarketDataService(streamingService);
+    this.streamingMarketDataService = new OkexStreamingMarketDataService(
+        streamingService,
+        Boolean.TRUE.equals(exchangeSpecification.getExchangeSpecificParametersItem(
+            PARAM_USE_BOOKS50)));
     this.streamingTradeService = new OkexStreamingTradeService(
         streamingService,
         exchangeMetaData,
@@ -101,10 +107,13 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
   private String getApiUrl() {
     String apiUrl;
     ExchangeSpecification exchangeSpec = getExchangeSpecification();
+    boolean publicEndpoint = exchangeSpec.getApiKey() == null
+        || Boolean.TRUE.equals(exchangeSpec.getExchangeSpecificParametersItem(
+            PARAM_PUBLIC_WEBSOCKET));
     if (exchangeSpec.getOverrideWebsocketApiUri() != null) {
 
       apiUrl =
-              (this.exchangeSpecification.getApiKey() == null)
+              publicEndpoint
                       ? exchangeSpec.getOverrideWebsocketApiUri()+WS_PUBLIC_PATH
                       : exchangeSpec.getOverrideWebsocketApiUri()+WS_PRIVATE_PATH;
       return apiUrl;
@@ -114,12 +123,12 @@ public class OkexStreamingExchange extends OkexExchange implements StreamingExch
         Boolean.TRUE.equals(exchangeSpecification.getExchangeSpecificParametersItem(PARAM_USE_AWS));
     if (useSandbox()) {
       apiUrl =
-          (this.exchangeSpecification.getApiKey() == null)
+          publicEndpoint
               ? SANDBOX_WS_PUBLIC_URI+SANDBOX_WS_PUBLIC_PATH
               : SANDBOX_WS_PRIVATE_URI+SANDBOX_WS_PRIVATE_PATH;
     } else {
       apiUrl =
-          (this.exchangeSpecification.getApiKey() == null)
+          publicEndpoint
               ? userAws ? AWS_WS_PUBLIC_URI+AWS_WS_PUBLIC_PATH : WS_PUBLIC_URI+WS_PUBLIC_PATH
               : userAws ? AWS_WS_PRIVATE_URI+AWS_WS_PRIVATE_PATH: WS_PRIVATE_URI+WS_PRIVATE_PATH;
     }

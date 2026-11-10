@@ -54,6 +54,64 @@ public class P2pOrderBookTest {
     assertEquals(0, view.bids.firstEntry().getValue().compareTo(new BigDecimal("6.3")));
   }
 
+  @Test public void dtoTimestampsUseExchangeMicrosTruncatedToMillis() {
+    P2pOrderBook book = new P2pOrderBook("BTC");
+    book.seed(Arrays.asList(SyntheticWire.order(1, true, "BTC", "99", "1"),
+        SyntheticWire.order(2, false, "BTC", "101", "2")));
+    long blockTimeMicros = 1_700_000_000_123_456L;
+    P2pOrderBook.View view = book.snapshot(blockTimeMicros, 987_654_321L);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    OrderBook dto = view.toOrderBook(instrument);
+    long expectedMillis = blockTimeMicros / 1000;
+    assertEquals(expectedMillis, dto.getTimeStamp().getTime());
+    dto.getBids().forEach(order -> assertEquals(expectedMillis, order.getTimestamp().getTime()));
+    dto.getAsks().forEach(order -> assertEquals(expectedMillis, order.getTimestamp().getTime()));
+    assertEquals(expectedMillis, view.toTicker(instrument).getTimestamp().getTime());
+  }
+
+  @Test public void blockTimestampPreservesUnsignedMicrosAndDetachedProvenance() {
+    P2pOrderBook book = new P2pOrderBook("BTC");
+    book.seed(Arrays.asList(SyntheticWire.order(1, true, "BTC", "99", "1"),
+        SyntheticWire.order(2, false, "BTC", "101", "2")));
+    BigInteger micros = P2pWireCodec.MAX_U64;
+    P2pOrderBook.View view = book.snapshot(micros, 123, BigInteger.valueOf(101), 2);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    OrderBook first = view.toOrderBook(instrument);
+    OrderBook second = view.toOrderBook(instrument);
+    assertEquals(micros, view.createdAtMicros);
+    assertEquals(123, view.receivedAtNanos);
+    assertTrue(first.getTimeStamp() instanceof P2pOrderBook.BlockTimestamp);
+    P2pOrderBook.BlockTimestamp timestamp = (P2pOrderBook.BlockTimestamp) first.getTimeStamp();
+    long expectedMillis = micros.divide(BigInteger.valueOf(1000)).longValueExact();
+    assertEquals(expectedMillis, timestamp.getTime());
+    assertEquals(micros, timestamp.getCreatedAtMicros());
+    assertEquals(BigInteger.valueOf(101), timestamp.getBlockHeight());
+    assertEquals(2, timestamp.getFramesAtHeight());
+    assertNotSame(first.getTimeStamp(), second.getTimeStamp());
+    timestamp.setTime(0); // DTO Date mutability cannot change immutable provenance or retained views.
+    assertEquals(micros, timestamp.getCreatedAtMicros());
+    assertEquals(expectedMillis, second.getTimeStamp().getTime());
+    assertEquals(expectedMillis, first.getBids().get(0).getTimestamp().getTime());
+    assertEquals(expectedMillis, first.getAsks().get(0).getTimestamp().getTime());
+    assertEquals(expectedMillis, view.toTicker(instrument).getTimestamp().getTime());
+    assertEquals(expectedMillis, view.toOrderBook(instrument).getTimeStamp().getTime());
+  }
+
+  @Test public void snapshotWithoutAppliedDiffCannotClaimCursorProvenance() {
+    P2pOrderBook book = new P2pOrderBook("BTC");
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    P2pOrderBook.View unknown = book.snapshot(null, 123, null, 0);
+    assertNull(unknown.createdAtMicros);
+    assertNull(unknown.toOrderBook(instrument).getTimeStamp());
+    assertNull(unknown.toTicker(instrument).getTimestamp());
+    assertEquals(123, unknown.receivedAtNanos);
+    assertFalse(book.snapshot(1234567, 123).toOrderBook(instrument).getTimeStamp()
+        instanceof P2pOrderBook.BlockTimestamp);
+    assertThrows(IllegalArgumentException.class, () -> book.snapshot(null, 123, BigInteger.ONE, 1));
+    assertThrows(IllegalArgumentException.class, () -> book.snapshot(BigInteger.ONE, 123, null, 1));
+    assertThrows(IllegalArgumentException.class, () -> book.snapshot(BigInteger.ONE, 123, BigInteger.ONE, 0));
+  }
+
   @Test public void fullDepthDetachedSortedViewsAndBboWithoutInventedLast() {
     P2pOrderBook book = new P2pOrderBook("BTC");
     for (int i = 1; i <= 60; i++) {

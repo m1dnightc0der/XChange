@@ -21,10 +21,16 @@ import io.reactivex.rxjava3.observers.TestObserver;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
@@ -36,6 +42,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import org.junit.Test;
 import org.knowm.xchange.currency.CurrencyPair;
+import org.knowm.xchange.derivative.FuturesContract;
+import org.knowm.xchange.dto.marketdata.OrderBook;
 import org.knowm.xchange.dto.marketdata.Ticker;
 
 /** Real provider handler + EmbeddedChannel ownership; no network or inherited global Rx hooks. */
@@ -43,6 +51,199 @@ public class P2pStreamingServiceTest {
   private static final String INFO = "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\"}}";
   private static final ThreadLocal<List<Harness>> ACTIVE_HARNESSES =
       ThreadLocal.withInitial(ArrayList::new);
+
+  @Test(timeout = 10000) public void sameBlockDiffsPublishExchangeTimeAndKeepDistinctCursors() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100,
+        SyntheticWire.order(1, true, "BTC", "99", "1"),
+        SyntheticWire.order(2, false, "BTC", "101", "1")), 32);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    List<P2pStreamingService.Cursor> cursors = new CopyOnWriteArrayList<>();
+    List<Ticker> tickers = new CopyOnWriteArrayList<>();
+    long blockTimeMicros = 1_700_000_000_123_456L;
+    byte[] firstBytes = diffAtBlockTime(1, 101, blockTimeMicros,
+        SyntheticWire.order(1, true, "BTC", "99", "2"));
+    byte[] secondBytes = diffAtBlockTime(2, 101, blockTimeMicros,
+        SyntheticWire.order(1, true, "BTC", "99", "3"));
+    P2pWireCodec.Diff firstDiff = (P2pWireCodec.Diff) new P2pWireCodec().decode(firstBytes);
+    P2pWireCodec.Diff secondDiff = (P2pWireCodec.Diff) new P2pWireCodec().decode(secondBytes);
+    try {
+      TestObserver<OrderBook> books = service.book("BTC").skip(1).doOnNext(view -> {
+        // Capture the validated cursor at publication, not after both frames have been applied.
+        cursors.add(service.getCursor());
+        tickers.add(view.toTicker(instrument));
+      }).map(view -> view.toOrderBook(instrument)).test();
+      TestObserver<P2pStreamingService.Observation> observations = service.observations().test();
+      service.start(); service.negotiate();
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      books.assertNoValues(); // Skip only the initial snapshot, which has no block time.
+      service.frame(firstBytes);
+      awaitWorker(service);
+      service.frame(secondBytes);
+      awaitWorker(service);
+      books.assertValueCount(2).assertNoErrors();
+      observations.assertValueCount(2).assertNoErrors();
+      assertEquals(firstDiff.height, secondDiff.height);
+      assertEquals(firstDiff.blockTimeMicros, secondDiff.blockTimeMicros);
+      assertNotEquals(firstDiff.sequence, secondDiff.sequence);
+      assertCursor(cursors.get(0), 101, 1);
+      assertCursor(cursors.get(1), 101, 2);
+      assertEquals(new BigDecimal("2"), books.values().get(0).getBids().get(0).getOriginalAmount());
+      assertEquals(new BigDecimal("3"), books.values().get(1).getBids().get(0).getOriginalAmount());
+      P2pWireCodec.Diff[] diffs = {firstDiff, secondDiff};
+      for (int i = 0; i < diffs.length; i++) {
+        P2pStreamingService.Observation observation = observations.values().get(i);
+        assertEquals(diffs[i].sequence, observation.getSequence());
+        assertEquals(diffs[i].height, observation.getHeight());
+        assertEquals(diffs[i].blockTimeMicros, observation.getBlockTimeMicros());
+        long expectedMillis = diffs[i].blockTimeMicros.divide(BigInteger.valueOf(1000)).longValueExact();
+        assertNotEquals(expectedMillis, observation.getIngressEpochMicros() / 1000);
+        assertBookTimestamps(books.values().get(i), tickers.get(i), new Date(expectedMillis));
+        assertBookProvenance(books.values().get(i), diffs[i].blockTimeMicros, 101, i + 1);
+      }
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void snapshotOnlyPublicationHasNoExchangeTimestamp() throws Exception {
+    Harness service = new Harness((coins, min) -> SyntheticWire.seed(100,
+        SyntheticWire.order(1, true, "BTC", "99", "1"),
+        SyntheticWire.order(2, false, "BTC", "101", "1")), 32);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      service.start(); service.negotiate();
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      books.assertValueCount(1).assertNoErrors();
+      assertCursor(service.getCursor(), 101, 0);
+      P2pOrderBook.View view = books.values().get(0);
+      assertNull(view.createdAtMicros);
+      // Neither the HTTP snapshot height nor a live status supplies block_time_us.
+      assertBookTimestamps(view.toOrderBook(instrument), view.toTicker(instrument), null);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void catchUpAndWarmReplayRetainLastAppliedBlockTime() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = new Harness((coins, min) -> {
+      fetches.incrementAndGet();
+      return SyntheticWire.seed(100, SyntheticWire.order(1, true, "BTC", "99", "1"),
+          SyntheticWire.order(2, false, "BTC", "101", "1"));
+    }, 32);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    long firstBlockTimeMicros = 1_700_000_000_123_456L;
+    byte[] covered = diffAtBlockTime(1, 101, firstBlockTimeMicros,
+        SyntheticWire.order(1, true, "BTC", "99", "2"));
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      service.start(); service.negotiate();
+      service.frame(covered); // Applied during catch-up, before there can be a publication.
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      awaitWorker(service);
+      books.assertValueCount(1).assertNoErrors();
+      P2pOrderBook.View caughtUp = books.values().get(0);
+      Date firstTime = new Date(firstBlockTimeMicros / 1000);
+      assertBookTimestamps(caughtUp.toOrderBook(instrument), caughtUp.toTicker(instrument), firstTime);
+      assertEquals(BigInteger.valueOf(firstBlockTimeMicros), caughtUp.createdAtMicros);
+      assertBookProvenance(caughtUp.toOrderBook(instrument), caughtUp.createdAtMicros, 101, 1);
+      long generation = service.getGeneration();
+      service.channel.close(); service.channel.runPendingTasks();
+      assertNotEquals(generation, service.getGeneration());
+      service.book("BTC").test().assertNoValues();
+      service.start(); service.negotiate();
+      service.frame(covered); // Verified same-height replay must not become a new book timestamp.
+      service.frame(SyntheticWire.status(0, 1, 103, 0));
+      awaitWorker(service);
+      books.assertValueCount(2).assertNoErrors();
+      assertEquals(1, fetches.get());
+      assertCursor(service.getCursor(), 103, 0); // Status advances recovery, not coin provenance.
+      P2pOrderBook.View resumed = books.values().get(1);
+      assertEquals(new BigDecimal("2"), resumed.bids.firstEntry().getValue());
+      assertBookTimestamps(resumed.toOrderBook(instrument), resumed.toTicker(instrument), firstTime);
+      assertBookProvenance(resumed.toOrderBook(instrument), caughtUp.createdAtMicros, 101, 1);
+      long nextBlockTimeMicros = firstBlockTimeMicros + 2_000_000L;
+      service.frame(diffAtBlockTime(2, 103, nextBlockTimeMicros,
+          SyntheticWire.order(1, true, "BTC", "99", "3")));
+      awaitWorker(service);
+      books.assertValueCount(3).assertNoErrors();
+      assertCursor(service.getCursor(), 103, 1);
+      P2pOrderBook.View updated = books.values().get(2);
+      assertBookTimestamps(updated.toOrderBook(instrument), updated.toTicker(instrument),
+          new Date(nextBlockTimeMicros / 1000));
+      assertBookProvenance(updated.toOrderBook(instrument), BigInteger.valueOf(nextBlockTimeMicros), 103, 1);
+      assertBookTimestamps(caughtUp.toOrderBook(instrument), caughtUp.toTicker(instrument), firstTime);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void statusAndOtherCoinProgressPreservePerCoinProvenance() throws Exception {
+    Map<String, List<P2pWireCodec.Change>> seed = new LinkedHashMap<>();
+    seed.put("BTC", Collections.singletonList(SyntheticWire.order(1, true, "BTC", "99", "1")));
+    seed.put("ETH", Collections.singletonList(SyntheticWire.order(2, true, "ETH", "9", "1")));
+    Harness service = new Harness(new LinkedHashSet<>(Arrays.asList("BTC", "ETH")),
+        Collections.emptySet(), (coins, min) -> new P2pWireCodec.Snapshot(BigInteger.valueOf(100), seed), 32);
+    FuturesContract btc = new FuturesContract("BTC/USDC/PERP");
+    FuturesContract eth = new FuturesContract("ETH/USDC/PERP");
+    long btcMicros = 1_700_000_000_123_456L, ethMicros = btcMicros + 2_000_000L;
+    try {
+      TestObserver<P2pOrderBook.View> btcBooks = service.book("BTC").test();
+      TestObserver<P2pOrderBook.View> ethBooks = service.book("ETH").test();
+      service.start(); service.negotiate();
+      service.frame(diffAtBlockTime(1, 101, btcMicros,
+          SyntheticWire.order(1, true, "BTC", "99", "2")));
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      awaitWorker(service);
+      btcBooks.assertValueCount(1).assertNoErrors();
+      ethBooks.assertValueCount(1).assertNoErrors();
+      assertBookProvenance(btcBooks.values().get(0).toOrderBook(btc), BigInteger.valueOf(btcMicros), 101, 1);
+      P2pOrderBook.View untouched = ethBooks.values().get(0);
+      assertNull(untouched.createdAtMicros);
+      assertBookTimestamps(untouched.toOrderBook(eth), untouched.toTicker(eth), null);
+      service.frame(diffAtBlockTime(2, 102, ethMicros,
+          SyntheticWire.order(2, true, "ETH", "9", "2")));
+      awaitWorker(service);
+      btcBooks.assertValueCount(1); // Another coin's diff does not create a new BTC update.
+      ethBooks.assertValueCount(2);
+      service.frame(SyntheticWire.status(0, 1, 103, 0));
+      awaitWorker(service);
+      assertCursor(service.getCursor(), 103, 0);
+      btcBooks.assertValueCount(2).assertNoErrors();
+      ethBooks.assertValueCount(3).assertNoErrors();
+      assertBookProvenance(btcBooks.values().get(1).toOrderBook(btc), BigInteger.valueOf(btcMicros), 101, 1);
+      assertBookProvenance(ethBooks.values().get(2).toOrderBook(eth), BigInteger.valueOf(ethMicros), 102, 1);
+      assertNull(untouched.createdAtMicros);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void coldSnapshotClearsPreviousBlockProvenance() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = new Harness((coins, min) -> {
+      fetches.incrementAndGet();
+      return SyntheticWire.seed(100, SyntheticWire.order(1, true, "BTC", "99", "1"));
+    }, 32);
+    FuturesContract instrument = new FuturesContract("BTC/USDC/PERP");
+    long micros = 1_700_000_000_123_456L;
+    try {
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      service.start(); service.negotiate();
+      service.frame(diffAtBlockTime(1, 101, micros, SyntheticWire.order(1, true, "BTC", "99", "2")));
+      service.frame(SyntheticWire.status(0, 1, 101, 0));
+      awaitWorker(service);
+      books.assertValueCount(1).assertNoErrors();
+      assertBookProvenance(books.values().get(0).toOrderBook(instrument), BigInteger.valueOf(micros), 101, 1);
+      service.frame(SyntheticWire.status(0, 2, 102, 103));
+      waitFor(() -> !service.channel.isOpen());
+      service.start(); service.negotiate();
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      books.assertValueCount(2).assertNoErrors();
+      assertEquals(2, fetches.get());
+      assertCursor(service.getCursor(), 101, 0);
+      P2pOrderBook.View replacement = books.values().get(1);
+      assertNull(replacement.createdAtMicros);
+      assertBookTimestamps(replacement.toOrderBook(instrument), replacement.toTicker(instrument), null);
+    } finally { service.stop(); }
+  }
 
   @Test(timeout = 10000) public void negotiationSeedStatusAndActualIngressDiagnosticsGateReadiness() throws Exception {
     AtomicInteger fetches = new AtomicInteger();
@@ -850,7 +1051,7 @@ public class P2pStreamingServiceTest {
       service.frame(SyntheticWire.status(3, 1, 105, 0));
       ready.awaitDone(3, TimeUnit.SECONDS).assertComplete().assertNoErrors();
       P2pOrderBook.View after = service.book("BTC").test().assertValueCount(1).values().get(0);
-      assertEquals(before.receivedAtMicros, after.receivedAtMicros);
+      assertEquals(before.createdAtMicros, after.createdAtMicros);
       assertEquals(before.receivedAtNanos, after.receivedAtNanos);
       assertEquals(ticker.getTimestamp(), after.toTicker(CurrencyPair.BTC_USDT).getTimestamp());
       assertEquals(ticker.getBid(), after.toTicker(CurrencyPair.BTC_USDT).getBid());
@@ -1271,7 +1472,7 @@ public class P2pStreamingServiceTest {
       books.assertValueCount(1);
       observations.assertNoValues();
       P2pOrderBook.View retained = service.book("BTC").test().assertValueCount(1).values().get(0);
-      assertEquals(original.receivedAtMicros, retained.receivedAtMicros);
+      assertEquals(original.createdAtMicros, retained.createdAtMicros);
       assertEquals(original.receivedAtNanos, retained.receivedAtNanos);
       assertEquals(original.toTicker(CurrencyPair.BTC_USDT).getTimestamp(),
           retained.toTicker(CurrencyPair.BTC_USDT).getTimestamp());
@@ -1837,6 +2038,31 @@ public class P2pStreamingServiceTest {
     assertNotNull(cursor);
     assertEquals(BigInteger.valueOf(height), cursor.getHeight());
     assertEquals(frames, cursor.getFramesAtHeight());
+  }
+
+  private static byte[] diffAtBlockTime(long sequence, long height, long blockTimeMicros,
+      P2pWireCodec.Change... changes) {
+    byte[] bytes = SyntheticWire.diff(sequence, height, changes);
+    // Book diff header: tag, sequence, local_time_us, block_time_us, height.
+    ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        .putLong(1 + 2 * Long.BYTES, blockTimeMicros);
+    return bytes;
+  }
+
+  private static void assertBookProvenance(OrderBook book, BigInteger micros, long height, long frames) {
+    assertTrue(book.getTimeStamp() instanceof P2pOrderBook.BlockTimestamp);
+    P2pOrderBook.BlockTimestamp timestamp = (P2pOrderBook.BlockTimestamp) book.getTimeStamp();
+    assertEquals(micros, timestamp.getCreatedAtMicros());
+    assertEquals(BigInteger.valueOf(height), timestamp.getBlockHeight());
+    assertEquals(frames, timestamp.getFramesAtHeight());
+    assertEquals(micros.divide(BigInteger.valueOf(1000)).longValueExact(), timestamp.getTime());
+  }
+
+  private static void assertBookTimestamps(OrderBook book, Ticker ticker, Date expected) {
+    assertEquals("OrderBook must use exchange block time, not ingress/status time", expected, book.getTimeStamp());
+    book.getBids().forEach(order -> assertEquals(expected, order.getTimestamp()));
+    book.getAsks().forEach(order -> assertEquals(expected, order.getTimestamp()));
+    assertEquals(expected, ticker.getTimestamp());
   }
 
   private static void assertTradeIds(TestObserver<P2pStreamingService.TradePublication> observer, String... expected) {

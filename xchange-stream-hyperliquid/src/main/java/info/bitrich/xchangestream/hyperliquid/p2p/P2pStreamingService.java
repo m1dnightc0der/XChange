@@ -110,6 +110,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   private int totalOrders;
   private Stamp lastLiveStamp;
   private final Map<String, P2pOrderBook.View> lastViews = new LinkedHashMap<>();
+  private final Map<String, BookProvenance> bookProvenance = new LinkedHashMap<>();
   private Map<String, P2pOrderBook> booksByCoin = new LinkedHashMap<>();
   private BigInteger nextSequence = BigInteger.ONE;
   private long replayRemaining;
@@ -325,6 +326,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
             booksByCoin = replacement;
             totalOrders = replacementOrders;
             lastViews.clear();
+            bookProvenance.clear(); // Snapshot metadata has no exchange block time.
             cursor = new Cursor(snapshot.height.add(BigInteger.ONE), 0);
             if (!tradeCoins.isEmpty() && tradeCursor == null) tradeCursor = new Cursor(cursor.height, 0);
             seeded = true;
@@ -767,6 +769,9 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     changedBooks.forEach(P2pOrderBook::validate);
     long n = diff.height.equals(cursor.height) ? Math.addExact(cursor.framesAtHeight, 1) : 1;
     cursor = new Cursor(diff.height, n);
+    // Commit provenance only after the entire frame validates. Replay/status never enter here.
+    BookProvenance provenance = new BookProvenance(diff.blockTimeMicros, cursor);
+    for (P2pWireCodec.Change change : diff.changes) bookProvenance.put(change.coin, provenance);
     decoded.appliedNanos = System.nanoTime();
   }
 
@@ -790,10 +795,15 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     Set<String> changed = new LinkedHashSet<>();
     if (decoded == null) changed.addAll(bookCoins);
     else decoded.diff.changes.forEach(change -> changed.add(change.coin));
-    // A snapshot-only publication has no fabricated socket receive timestamp.
-    long micros = stamp == null ? 0 : stamp.micros;
     long nanos = stamp == null ? 0 : stamp.nanos;
-    for (String coin : changed) lastViews.put(coin, booksByCoin.get(coin).snapshot(micros, nanos));
+    for (String coin : changed) {
+      // Global status/other-coin progress must not replace this coin's applied diff identity.
+      BookProvenance provenance = bookProvenance.get(coin);
+      lastViews.put(coin, booksByCoin.get(coin).snapshot(
+          provenance == null ? null : provenance.createdAtMicros, nanos,
+          provenance == null ? null : provenance.cursor.height,
+          provenance == null ? 0 : provenance.cursor.framesAtHeight));
+    }
     Map<String, P2pOrderBook.View> views = new LinkedHashMap<>(lastViews);
     long readyNanos = System.nanoTime();
     if (token != generation.get() || !bookLive) return;
@@ -1370,6 +1380,14 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     P2pWireCodec.Snapshot fetch(Set<String> coins, BigInteger minHeight) throws Exception;
   }
   private interface Work { void run() throws Exception; }
+  private static final class BookProvenance {
+    final BigInteger createdAtMicros;
+    final Cursor cursor;
+    BookProvenance(BigInteger createdAtMicros, Cursor cursor) {
+      this.createdAtMicros = createdAtMicros;
+      this.cursor = cursor;
+    }
+  }
   private static final class Stamp {
     final long micros; final long nanos;
     Stamp(long micros, long nanos) { this.micros = micros; this.nanos = nanos; }
