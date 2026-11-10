@@ -48,13 +48,15 @@ public final class P2pWireCodec {
     if ((tag == 0 || tag == 10 || tag == 11) && bytes.length < 9) {
       throw malformed("Missing channel sent timestamp");
     }
-    if (tag != 6 && tag != 13) {
-      // No book state is inferred from block, trade, metric, or future tags.
+    if (tag != 0 && tag != 6 && tag != 11 && tag != 13) {
       return new Ignored(tag);
     }
     if (bytes.length < 9) throw malformed("Missing sent timestamp");
     Reader r = new Reader(bytes, 1, bytes.length - 8);
     BigInteger sent = new Reader(bytes, bytes.length - 8, bytes.length).u64();
+    if (tag == 0) {
+      return new Block(r.u64(), r.u64(), r.u64(), r.u64(), sent);
+    }
     if (tag == 13) {
       int stream = r.u8();
       int state = r.u8();
@@ -65,11 +67,31 @@ public final class P2pWireCodec {
       return new Status(stream, state, height, to, sent);
     }
     BigInteger seq = r.u64();
-    if (seq.signum() == 0) throw malformed("Book sequence starts at one");
+    if (seq.signum() == 0) throw malformed("Channel sequence starts at one");
     BigInteger localTime = r.u64();
     BigInteger blockTime = r.u64();
     BigInteger height = r.u64();
-    int count = r.count(maxOrders, 15);
+    // Even the smallest valid trade needs 81 bytes, including both complete sides.
+    int count = r.count(maxOrders, tag == 11 ? 81 : 15);
+    if (tag == 11) {
+      List<TradeEvent> trades = new ArrayList<>();
+      for (int i = 0; i < count; i++) {
+        BigInteger eventTime = r.u64();
+        boolean buy = r.flag();
+        String hash = r.flag() ? r.hex(32) : null;
+        String coin = r.string();
+        BigDecimal price = r.decimal();
+        BigDecimal size = r.decimal();
+        String direction = r.string();
+        TradeSide buyer = r.tradeSide();
+        TradeSide seller = r.tradeSide();
+        if (coin.isEmpty() || price.signum() <= 0 || size.signum() <= 0) {
+          throw malformed("Invalid trade values");
+        }
+        trades.add(new TradeEvent(eventTime, buy, hash, coin, price, size, direction, buyer, seller));
+      }
+      return new TradeBatch(seq, localTime, blockTime, height, sent, trades);
+    }
     List<Change> changes = new ArrayList<>();
     for (int i = 0; i < count; i++) {
       BigInteger oid = r.u64();
@@ -193,6 +215,82 @@ public final class P2pWireCodec {
     }
   }
 
+  /** Live block metadata only; never a book completion boundary. */
+  public static final class Block implements Frame {
+    public final BigInteger blockTimeMillis;
+    public final BigInteger height;
+    public final BigInteger wallTimeMicros;
+    public final BigInteger applyDurationMicros;
+    public final BigInteger sentTimeMicros;
+    Block(BigInteger blockTimeMillis, BigInteger height, BigInteger wallTimeMicros,
+        BigInteger applyDurationMicros, BigInteger sentTimeMicros) {
+      this.blockTimeMillis = blockTimeMillis;
+      this.height = height;
+      this.wallTimeMicros = wallTimeMicros;
+      this.applyDurationMicros = applyDurationMicros;
+      this.sentTimeMicros = sentTimeMicros;
+    }
+  }
+
+  public static final class TradeBatch implements Frame {
+    public final BigInteger sequence;
+    public final BigInteger localTimeMicros;
+    public final BigInteger blockTimeMicros;
+    public final BigInteger height;
+    public final BigInteger sentTimeMicros;
+    public final List<TradeEvent> trades;
+    TradeBatch(BigInteger sequence, BigInteger localTimeMicros, BigInteger blockTimeMicros,
+        BigInteger height, BigInteger sentTimeMicros, List<TradeEvent> trades) {
+      this.sequence = sequence;
+      this.localTimeMicros = localTimeMicros;
+      this.blockTimeMicros = blockTimeMicros;
+      this.height = height;
+      this.sentTimeMicros = sentTimeMicros;
+      this.trades = Collections.unmodifiableList(new ArrayList<>(trades));
+    }
+  }
+
+  /** Raw fixed-width bytes are losslessly represented as immutable lowercase hex. */
+  public static final class TradeEvent {
+    public final BigInteger eventTimeMicros;
+    public final boolean buy;
+    public final String hash;
+    public final String coin;
+    public final BigDecimal price;
+    public final BigDecimal size;
+    public final String direction;
+    public final TradeSide buyer;
+    public final TradeSide seller;
+    TradeEvent(BigInteger eventTimeMicros, boolean buy, String hash, String coin,
+        BigDecimal price, BigDecimal size, String direction, TradeSide buyer, TradeSide seller) {
+      this.eventTimeMicros = eventTimeMicros;
+      this.buy = buy;
+      this.hash = hash;
+      this.coin = coin;
+      this.price = price;
+      this.size = size;
+      this.direction = direction;
+      this.buyer = buyer;
+      this.seller = seller;
+    }
+  }
+
+  public static final class TradeSide {
+    public final String user;
+    public final BigInteger oid;
+    public final BigInteger twapId;
+    public final String cloid;
+    public final BigDecimal startPosition;
+    TradeSide(String user, BigInteger oid, BigInteger twapId, String cloid,
+        BigDecimal startPosition) {
+      this.user = user;
+      this.oid = oid;
+      this.twapId = twapId;
+      this.cloid = cloid;
+      this.startPosition = startPosition;
+    }
+  }
+
   public static final class Status implements Frame {
     public final int stream;
     public final int state;
@@ -250,6 +348,23 @@ public final class P2pWireCodec {
       byte[] bigEndian = new byte[8];
       for (int i = 7; i >= 0; i--) bigEndian[i] = bytes[position++];
       return new BigInteger(1, bigEndian);
+    }
+    String hex(int length) {
+      need(length);
+      char[] value = new char[length * 2];
+      for (int i = 0; i < length; i++) {
+        int b = u8();
+        value[i * 2] = Character.forDigit(b >>> 4, 16);
+        value[i * 2 + 1] = Character.forDigit(b & 15, 16);
+      }
+      return new String(value);
+    }
+    TradeSide tradeSide() {
+      String user = hex(20);
+      BigInteger oid = u64();
+      BigInteger twapId = flag() ? u64() : null;
+      String cloid = flag() ? hex(16) : null;
+      return new TradeSide(user, oid, twapId, cloid, decimal());
     }
     int count(int max, int minimumBytes) {
       long n = u32();
