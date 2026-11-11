@@ -3,17 +3,24 @@ package info.bitrich.xchangestream.hyperliquid.p2p;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import info.bitrich.xchangestream.core.ProductSubscription;
 import info.bitrich.xchangestream.hyperliquid.HyperliquidStreamingExchange;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.observers.TestObserver;
+import io.reactivex.rxjava3.schedulers.TestScheduler;
 import io.reactivex.rxjava3.subjects.PublishSubject;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.knowm.xchange.ExchangeSpecification;
 import org.knowm.xchange.currency.CurrencyPair;
@@ -167,6 +174,183 @@ public class P2pStreamingExchangeTest {
     exchange.connect(ProductSubscription.create().addOrderbook(BTC).build()).test()
         .assertError(IllegalArgumentException.class);
     assertNull(exchange.stub);
+  }
+
+  @Test(timeout = 10000) public void connectPreservesTerminalCodeAndCauseBeforeTestDeadline() throws Exception {
+    BoundaryExchange exchange = new BoundaryExchange();
+    TestScheduler deadline = new TestScheduler();
+    TestObserver<Void> connection = exchange.connect(boundaryProducts())
+        .timeout(1, TimeUnit.SECONDS, deadline).test();
+    try {
+      negotiateBookReplay(exchange);
+      connection.assertNotComplete().assertNoErrors();
+      exchange.provider.text("{\"channel\":\"errors\",\"code\":\"version_mismatch\","
+          + "\"message\":\"requested binary version is unsupported\"}");
+      P2pStreamingServiceTest.waitFor(() -> exchange.getLastFailure() != null);
+      connection.awaitDone(1, TimeUnit.SECONDS).assertNotComplete()
+          .assertError(error -> error == exchange.getLastFailure()
+              && error instanceof IOException
+              && error.getMessage().contains("version_mismatch")
+              && error.getMessage().contains("requested binary version is unsupported"));
+      // The provider exception, not the deliberately short external deadline, terminates connect.
+      deadline.advanceTimeBy(1, TimeUnit.SECONDS);
+      connection.assertError(error -> error == exchange.getLastFailure());
+      assertEquals(1, exchange.disconnectCalls.get());
+      assertEquals(P2pStreamingService.Readiness.DISCONNECTED, exchange.getReadiness());
+      assertEquals(1, exchange.provider.channelsCreated.size());
+      assertFalse(exchange.provider.channel.isOpen());
+    } finally {
+      connection.dispose();
+      exchange.provider.stop();
+    }
+  }
+
+  @Test(timeout = 10000) public void connectSurvivesDocumentedHistoryErrorWithoutCleanupStoppingRecovery() throws Exception {
+    BoundaryExchange exchange = new BoundaryExchange();
+    TestObserver<Void> connection = exchange.connect(boundaryProducts()).test();
+    TestObserver<Trade> trades = exchange.getStreamingMarketDataService().getTrades(ETH).test();
+    try {
+      negotiateBookReplay(exchange);
+      long generation = exchange.getGeneration();
+      exchange.provider.text("{\"channel\":\"errors\",\"code\":\"history_error\",\"message\":\"reader failed\"}");
+      P2pStreamingServiceTest.waitFor(() -> exchange.getLastFailure() != null
+          && !exchange.provider.channel.isOpen());
+      connection.assertNotComplete().assertNoErrors();
+      assertEquals(0, exchange.disconnectCalls.get());
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, exchange.getReadiness());
+      assertTrue(exchange.getGeneration() > generation);
+      assertTrue(exchange.getLastFailure() instanceof IOException);
+      assertTrue(exchange.getLastFailure().getMessage().contains("history_error"));
+      assertTrue(exchange.getLastFailure().getMessage().contains("reader failed"));
+      assertEquals(BigInteger.valueOf(101), exchange.getCursor().getHeight());
+      assertEquals(0, exchange.getCursor().getFramesAtHeight());
+
+      // This offline harness replaces only transport establishment. Drive a real new provider
+      // connection; inherited socket retry/close-1011 ownership belongs to P2pNettyReconnectTest.
+      // Do not call exchange.connect again: its original readiness wait must survive recovery.
+      int before = exchange.provider.sent.size();
+      exchange.provider.start();
+      P2pStreamingServiceTest.waitFor(() -> exchange.provider.sent.size() == before + 1);
+      exchange.provider.negotiate(boundaryInfo(), 2);
+      assertEquals(2, exchange.provider.channelsCreated.size());
+      assertNotSame(exchange.provider.channelsCreated.get(0), exchange.provider.channel);
+      assertReplaySubscription(exchange.provider.sent.get(before + 2), null, "BTC");
+      assertEquals(1, exchange.snapshotFetches.get());
+      connection.assertNotComplete().assertNoErrors();
+      exchange.provider.frame(SyntheticWire.diff(1, 101,
+          SyntheticWire.order(1, true, "BTC", "99", "2")));
+      exchange.provider.frame(SyntheticWire.status(0, 1, 101, 0));
+      P2pStreamingServiceTest.waitFor(() -> exchange.provider.sent.size() == before + 4);
+      assertReplaySubscription(exchange.provider.sent.get(before + 3), "trades", "ETH");
+      connection.assertNotComplete().assertNoErrors(); // Book LIVE alone is insufficient.
+      SyntheticWire.Encoded side = SyntheticWire.tradeSide(new byte[20], BigInteger.ONE, null, null, "0");
+      exchange.provider.frame(SyntheticWire.trades(BigInteger.ONE, BigInteger.ZERO, BigInteger.ZERO,
+          BigInteger.valueOf(101), BigInteger.ZERO,
+          SyntheticWire.trade(BigInteger.valueOf(123456789), true, null, "ETH", "10.25", "2.5",
+              "Open", side, side)).bytes);
+      exchange.provider.frame(SyntheticWire.status(3, 1, 101, 0));
+      P2pStreamingServiceTest.waitFor(() -> exchange.getReadiness() == P2pStreamingService.Readiness.LIVE);
+      connection.awaitDone(1, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+      trades.assertValueCount(1).assertNoErrors();
+      assertEquals("p2p:trades:101:1:0", trades.values().get(0).getId());
+      assertEquals(BigInteger.valueOf(101), exchange.getCursor().getHeight());
+      assertEquals(1, exchange.getCursor().getFramesAtHeight());
+      assertEquals(BigInteger.valueOf(101), exchange.provider.getTradeCursor().getHeight());
+      assertEquals(1, exchange.provider.getTradeCursor().getFramesAtHeight());
+      assertEquals(0, exchange.disconnectCalls.get());
+      assertEquals(1, exchange.snapshotFetches.get());
+      assertTrue(exchange.provider.channel.isOpen());
+    } finally {
+      trades.dispose();
+      connection.dispose();
+      exchange.provider.stop();
+    }
+  }
+
+  @Test(timeout = 10000) public void silentBookReplayTimesOutOnlyAtExternalTestDeadline() throws Exception {
+    BoundaryExchange exchange = new BoundaryExchange();
+    TestScheduler deadline = new TestScheduler();
+    TestObserver<Void> connection = exchange.connect(boundaryProducts())
+        .timeout(1, TimeUnit.SECONDS, deadline).test();
+    try {
+      negotiateBookReplay(exchange);
+      deadline.advanceTimeBy(999, TimeUnit.MILLISECONDS);
+      connection.assertNotComplete().assertNoErrors();
+      assertNull(exchange.getLastFailure());
+      deadline.advanceTimeBy(1, TimeUnit.MILLISECONDS);
+      connection.assertNotComplete().assertError(TimeoutException.class);
+      assertNull(exchange.getLastFailure());
+      assertEquals(0, exchange.disconnectCalls.get());
+      assertEquals(P2pStreamingService.Readiness.CATCHING_UP, exchange.getReadiness());
+      assertEquals(3, exchange.provider.sent.size()); // Still before any trade subscription.
+      assertEquals(1, exchange.provider.channelsCreated.size());
+      assertTrue(exchange.provider.channel.isOpen());
+    } finally {
+      connection.dispose();
+      exchange.provider.stop();
+    }
+  }
+
+  private static ProductSubscription boundaryProducts() {
+    return ProductSubscription.create().addOrderbook(BTC).addTrades(ETH).build();
+  }
+
+  private static String boundaryInfo() {
+    return "{\"channel\":\"info\",\"binary_version\":3,\"streams\":{\"book\":\"on\",\"trades\":\"on\"}}";
+  }
+
+  private static void negotiateBookReplay(BoundaryExchange exchange) throws Exception {
+    P2pStreamingServiceTest.waitFor(() -> exchange.provider.sent.size() == 1);
+    assertEquals("{\"method\":\"info\"}", exchange.provider.sent.get(0));
+    exchange.provider.negotiate(boundaryInfo(), 2);
+    assertEquals("{\"method\":\"esp\",\"version\":3}", exchange.provider.sent.get(1));
+    assertReplaySubscription(exchange.provider.sent.get(2), null, "BTC");
+    assertEquals(1, exchange.snapshotFetches.get());
+    assertEquals(P2pStreamingService.Readiness.CATCHING_UP, exchange.getReadiness());
+    assertNull(exchange.getLastFailure());
+  }
+
+  private static void assertReplaySubscription(String message, String stream, String coin) throws Exception {
+    JsonNode command = new ObjectMapper().readTree(message);
+    assertEquals("subscribe", command.path("method").asText());
+    if (stream == null) assertFalse(command.has("stream"));
+    else assertEquals(stream, command.path("stream").asText());
+    assertEquals(1, command.path("coins").size());
+    assertEquals(coin, command.path("coins").get(0).asText());
+    assertTrue(command.path("from_height").isIntegralNumber());
+    assertEquals(101, command.path("from_height").asLong());
+  }
+
+  private static final class BoundaryExchange extends P2pHyperliquidStreamingExchange {
+    final AtomicInteger snapshotFetches = new AtomicInteger();
+    final AtomicInteger disconnectCalls = new AtomicInteger();
+    P2pStreamingServiceTest.Harness provider;
+
+    BoundaryExchange() {
+      ExchangeSpecification spec = getDefaultExchangeSpecification();
+      spec.setShouldLoadRemoteMetaData(false);
+      spec.setOverrideWebsocketApiUri("wss://native-public.invalid/ws");
+      spec.setExchangeSpecificParametersItem(P2P_WS_URI, "wss://offline.invalid/ws");
+      spec.setExchangeSpecificParametersItem(P2P_SNAPSHOT_URI, "https://snapshot.invalid/book");
+      applySpecification(spec);
+    }
+
+    @Override protected P2pStreamingService createP2pService(URI websocket, Set<String> books,
+        Set<String> trades, P2pSnapshotClient snapshots) {
+      provider = new P2pStreamingServiceTest.Harness(books, trades, (coins, minimum) -> {
+        assertEquals(Collections.singleton("BTC"), coins);
+        assertEquals(BigInteger.ZERO, minimum);
+        snapshotFetches.incrementAndGet();
+        return SyntheticWire.seed(100, SyntheticWire.order(1, true, "BTC", "99", "1"),
+            SyntheticWire.order(2, false, "BTC", "101", "1"));
+      }, 32);
+      return provider;
+    }
+
+    @Override public Completable disconnect() {
+      disconnectCalls.incrementAndGet();
+      return super.disconnect();
+    }
   }
 
   private static TestExchange configured(boolean snapshot) {

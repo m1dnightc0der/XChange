@@ -544,6 +544,120 @@ public class P2pNettyReconnectTest {
     }
   }
 
+  @Test(timeout = 45000)
+  public void startupBookReplaySocketCloseUsesInheritedReconnect() throws Exception {
+    assertStartupBookReplayRecovery(false);
+  }
+
+  @Test(timeout = 45000)
+  public void documentedHistoryErrorDuringStartupUsesInheritedReconnect() throws Exception {
+    assertStartupBookReplayRecovery(true);
+  }
+
+  private static void assertStartupBookReplayRecovery(boolean historyError) throws Exception {
+    AtomicInteger snapshotRequests = new AtomicInteger();
+    P2pSnapshotClient snapshots = startupSnapshots(snapshotRequests);
+    try (LoopbackPeer peer = new LoopbackPeer()) {
+      P2pStreamingService service = new P2pStreamingService(peer.uri(), COINS,
+          Collections.singleton("SOL"), snapshots);
+      TestObserver<Void> live = service.awaitLive().test();
+      TestObserver<TradePublication> trades = service.trades("SOL").test();
+      try {
+        assertTrue(service.connect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+        Session first = peer.nextSession();
+        negotiateStreams(first, true);
+        expectSubscription(first, false, COINS, 101);
+        assertEquals("Reproduce the last logged startup command", 3, first.commands.size());
+        assertEquals(Readiness.CATCHING_UP, service.getReadiness());
+        long generation = service.getGeneration();
+        if (historyError) {
+          // Wait for the error before closing so a racing close cannot discard the
+          // documented error as stale and accidentally hide terminal classification.
+          first.channel.writeAndFlush(new TextWebSocketFrame(
+              "{\"channel\":\"errors\",\"code\":\"history_error\",\"message\":\"reader failed\"}"))
+              .sync();
+          await("history_error handled", () -> service.getGeneration() > generation
+              || service.isTerminal());
+          assertFalse("Recoverable history_error became terminal: " + service.getLastFailure(),
+              service.isTerminal());
+          if (first.channel.isOpen()) {
+            io.netty.channel.ChannelFuture lateClose = first.channel.writeAndFlush(
+                new io.netty.handler.codec.http.websocketx.CloseWebSocketFrame(1011, "history_error"));
+            assertTrue(lateClose.await(WAIT_SECONDS, TimeUnit.SECONDS));
+            // The client may already have closed this failed generation. The exact
+            // late-1011 successor fence is also exercised by the embedded regression.
+            assertTrue(lateClose.isSuccess() || lateClose.cause() instanceof java.nio.channels.ClosedChannelException);
+          }
+        } else {
+          first.closeSocket();
+        }
+        Session second = peer.nextSession();
+        assertFalse("Reconnect must use a new transport", first.channel == second.channel);
+        negotiateStreams(second, true);
+        expectSubscription(second, false, COINS, 101);
+        assertEquals("Recoverable startup failure must retain its valid snapshot", 1,
+            snapshotRequests.get());
+        second.binary(SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "2")));
+        second.binary(SyntheticWire.status(0, 1, 101, 0));
+        expectSubscription(second, true, Collections.singleton("SOL"), 101);
+        second.binary(tradeBatch(1, 101, fill("SOL", true, "1")));
+        second.binary(SyntheticWire.status(3, 1, 101, 0));
+        await("both recovered channels LIVE", () -> service.getReadiness() == Readiness.LIVE);
+        live.awaitDone(WAIT_SECONDS, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+        assertTradeIds(trades, "p2p:trades:101:1:0");
+        assertOneSocket(peer);
+      } finally {
+        live.dispose();
+        trades.dispose();
+        service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @Test(timeout = 45000)
+  public void documentedInformationalErrorLogDoesNotAbortStartup() throws Exception {
+    AtomicInteger snapshotRequests = new AtomicInteger();
+    try (LoopbackPeer peer = new LoopbackPeer()) {
+      P2pStreamingService service = new P2pStreamingService(peer.uri(), COINS,
+          Collections.singleton("SOL"), startupSnapshots(snapshotRequests));
+      TestObserver<Void> live = service.awaitLive().test();
+      try {
+        assertTrue(service.connect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS));
+        Session session = peer.nextSession();
+        negotiateStreams(session, true);
+        expectSubscription(session, false, COINS, 101);
+        session.channel.write(new TextWebSocketFrame(
+            "{\"channel\":\"errors\",\"error\":\"history_error while rotating server log\"}"));
+        session.channel.write(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(
+            SyntheticWire.diff(1, 101, SyntheticWire.order(1, true, "BTC", "10", "2")))));
+        session.channel.writeAndFlush(new BinaryWebSocketFrame(Unpooled.wrappedBuffer(
+            SyntheticWire.status(0, 1, 101, 0)))).sync();
+        await("server log and following book status handled", () -> service.isTerminal()
+            || session.commands.size() > 3);
+        assertFalse("Informational server log became terminal: " + service.getLastFailure(),
+            service.isTerminal());
+        expectSubscription(session, true, Collections.singleton("SOL"), 101);
+        session.binary(SyntheticWire.status(3, 1, 101, 0));
+        live.awaitDone(WAIT_SECONDS, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+        assertEquals(1, snapshotRequests.get());
+        assertOneSocket(peer);
+      } finally {
+        live.dispose();
+        service.disconnect().blockingAwait(WAIT_SECONDS, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  private static P2pSnapshotClient startupSnapshots(AtomicInteger requests) {
+    return new P2pSnapshotClient(URI.create("http://127.0.0.1:1/snapshot"),
+        Collections.emptySet(), new P2pWireCodec(), (uri, maxBytes) -> {
+          requests.incrementAndGet();
+          return new P2pSnapshotClient.Response(200,
+              Collections.singletonMap("X-Snapshot-Height", "100"), snapshot());
+        }, System::currentTimeMillis,
+        delay -> { throw new AssertionError("Unexpected snapshot backoff: " + delay); });
+  }
+
   private static void negotiateStreams(Session session, boolean books) throws Exception {
     assertEquals("{\"method\":\"info\"}", session.expect("info").toString());
     replyStreamInfo(session, books);

@@ -377,17 +377,37 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     if (token != generation.get() || stopped.get()) return;
     if (root == null || !root.isObject()) { fail(new IOException("Invalid control message")); return; }
     String channel = root.path("channel").asText();
-    String error = root.path("error").asText();
-    if (error.isEmpty()) error = root.path("error").path("code").asText();
-    if (error.isEmpty()) error = root.path("code").asText();
-    if (error.isEmpty() && "error".equals(channel)) {
-      JsonNode data = root.path("data");
-      error = data.isTextual() ? data.asText() : data.path("code").asText();
+    // The plural errors channel also carries informational server logs. Their text
+    // is not a protocol code, even when it happens to name a recoverable error.
+    if ("errors".equals(channel) && !root.has("code") && root.path("error").isTextual()) return;
+    String error;
+    if (root.has("code")) {
+      if (!root.path("code").isTextual() || root.path("code").asText().isEmpty()) {
+        fail(new IOException("Invalid P2P control error code"));
+        return;
+      }
+      error = root.path("code").asText();
+    } else {
+      // Preserve the explicitly supported legacy error envelopes.
+      error = root.path("error").asText();
+      if (error.isEmpty()) error = root.path("error").path("code").asText();
+      if (error.isEmpty() && "error".equals(channel)) {
+        JsonNode data = root.path("data");
+        error = data.isTextual() ? data.asText() : data.path("code").asText();
+      }
     }
     if (!error.isEmpty() || "error".equals(channel) || "errors".equals(channel)) {
+      String detail = "P2P control error: " + error;
+      if (root.path("message").isTextual()) detail += " (" + root.path("message").asText() + ")";
+      // A history reader failure is connection-wide, including after subscription
+      // ownership has cleared. The following 1011 close is fenced by invalidate.
+      if ("history_error".equals(error)) {
+        invalidate(token, new IOException(detail), false);
+        return;
+      }
       Subscription owner = errorOwner(root);
       if (owner == null || (owner == Subscription.BOOK ? !subscribed : !tradeSubscribed)) {
-        fail(new IOException("Unattributable P2P control error"));
+        fail(new IOException("Unattributable " + detail));
         return;
       }
       if ("history_busy".equals(error)) {
@@ -431,7 +451,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
           invalidate(token, new IOException("Trade history unavailable"), false);
         }
       } else {
-        fail(new IOException("P2P control error"));
+        fail(new IOException(detail));
       }
       return;
     }
@@ -623,7 +643,8 @@ public class P2pStreamingService extends NettyStreamingService<String> {
           tradeCursor = new Cursor(status.toHeight.add(BigInteger.ONE), 0);
           tradeReplayRemaining = 0;
           partialTrade = null;
-          tradeLive = false;
+          // A live stream continues after the gap without another LIVE status.
+          // Preserve prior liveness; a replaying stream still needs normal completion.
         }
       } else if (status.state == 0) {
         tradeLive = false;

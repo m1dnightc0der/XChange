@@ -1368,6 +1368,162 @@ public class P2pStreamingServiceTest {
     }
   }
 
+  @Test(timeout = 10000) public void informationalServerLogsPreservePendingOwnersCursorsAndLiveState() throws Exception {
+    for (int phase = 0; phase < 3; phase++) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        startCombined(service);
+        if (phase > 0) {
+          service.frame(SyntheticWire.status(0, 1, 100, 0));
+          awaitWorker(service);
+        }
+        if (phase == 2) {
+          service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+          service.frame(SyntheticWire.status(3, 1, 101, 0));
+          awaitWorker(service);
+        }
+        String owner = phase == 0 ? "BOOK" : phase == 1 ? "TRADES" : null;
+        assertHistoryOwner(service, owner);
+        long generation = service.getGeneration();
+        P2pStreamingService.Readiness readiness = service.getReadiness();
+        P2pStreamingService.Cursor bookCursor = service.getCursor();
+        P2pStreamingService.Cursor tradeCursor = service.getTradeCursor();
+        int controls = service.sent.size();
+        for (String log : Arrays.asList("server log", "history_error", "history_busy", "history_unavailable")) {
+          service.text("{\"channel\":\"errors\",\"error\":\"" + log + "\",\"oldest_height\":250}");
+          awaitWorker(service);
+          assertEquals("Informational log changed readiness: " + log, readiness, service.getReadiness());
+          assertEquals(generation, service.getGeneration());
+          assertSame(bookCursor, service.getCursor());
+          assertSame(tradeCursor, service.getTradeCursor());
+          assertNull(service.getLastFailure());
+          assertNull(service.getLastTradeContinuityWarning());
+          assertEquals(controls, service.sent.size());
+          assertHistoryOwner(service, owner);
+          assertTrue(service.channel.isOpen());
+        }
+        assertEquals(1, fetches.get());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void documentedHistoryErrorRecoversBeforeAndAfterSubscriptionOwnership() throws Exception {
+    for (int phase = -1; phase < 3; phase++) {
+      AtomicInteger fetches = new AtomicInteger();
+      Harness service = combinedService(fetches);
+      try {
+        if (phase < 0) service.start();
+        else startCombined(service);
+        if (phase > 0) {
+          service.frame(SyntheticWire.status(0, 1, 100, 0));
+          awaitWorker(service);
+        }
+        if (phase == 2) {
+          service.frame(SyntheticWire.status(3, 1, 101, 0));
+          awaitWorker(service);
+          assertHistoryOwner(service, null);
+        }
+        long generation = service.getGeneration();
+        P2pStreamingService.Cursor bookCursor = service.getCursor();
+        P2pStreamingService.Cursor tradeCursor = service.getTradeCursor();
+        service.text("{\"channel\":\"errors\",\"code\":\"history_error\",\"message\":\"reader failed\"}");
+        waitFor(() -> !service.channel.isOpen());
+        assertFalse("history_error must permit inherited retry, phase=" + phase, service.isTerminal());
+        assertEquals(generation + 1, service.getGeneration());
+        assertSame(bookCursor, service.getCursor());
+        assertSame(tradeCursor, service.getTradeCursor());
+        assertTrue(service.getLastFailure().getMessage().contains("history_error"));
+        assertTrue(service.getLastFailure().getMessage().contains("reader failed"));
+        assertEquals(1, fetches.get());
+      } finally { service.stop(); }
+    }
+  }
+
+  @Test(timeout = 10000) public void historyErrorThenLateCloseCannotRevokeWarmSuccessor() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      startCombined(service);
+      P2pStreamingService.BinaryHandler oldHandler = handler(service);
+      ChannelHandlerContext oldContext = service.channel.pipeline().context(oldHandler);
+      long originalGeneration = service.getGeneration();
+      service.text("{\"channel\":\"errors\",\"code\":\"history_error\",\"message\":\"reader failed\"}");
+      waitFor(() -> !service.channel.isOpen());
+      assertFalse(service.isTerminal());
+      assertEquals(originalGeneration + 1, service.getGeneration());
+      startCombined(service);
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      service.frame(SyntheticWire.status(3, 1, 101, 0));
+      awaitWorker(service);
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      long successorGeneration = service.getGeneration();
+      Throwable cause = service.getLastFailure();
+      oldHandler.channelRead(oldContext,
+          new io.netty.handler.codec.http.websocketx.CloseWebSocketFrame(1011, "history_error"));
+      oldHandler.channelInactive(oldContext);
+      awaitWorker(service);
+      assertEquals(successorGeneration, service.getGeneration());
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertSame(cause, service.getLastFailure());
+      assertTrue(service.channel.isOpen());
+      assertEquals(1, fetches.get());
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void topLevelCodeOverridesHumanErrorAndMessageText() throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      startCombined(service);
+      P2pStreamingService.Cursor before = service.getCursor();
+      service.text("{\"channel\":\"errors\",\"code\":\"history_error\","
+          + "\"error\":\"history_unavailable\",\"message\":\"version_mismatch in diagnostic text\"}");
+      waitFor(() -> !service.channel.isOpen());
+      assertFalse(service.isTerminal());
+      assertSame(before, service.getCursor());
+      assertTrue(service.getLastFailure().getMessage().contains("history_error"));
+      startCombined(service);
+      assertEquals("Code must choose warm resume, not the error text's live-first recovery", 1, fetches.get());
+      assertSubscription(service.sent.get(service.sent.size() - 1), "book", "BTC", 101);
+    } finally { service.stop(); }
+  }
+
+  @Test(timeout = 10000) public void terminalCodedErrorsPreserveCodeMessageAndOriginalException() throws Exception {
+    for (boolean pending : Arrays.asList(false, true)) {
+      for (String code : Arrays.asList("version_mismatch", "invalid_json", "unknown_future_code")) {
+        Harness service = combinedService(new AtomicInteger());
+        try {
+          if (pending) startCombined(service);
+          else service.start();
+          TestObserver<Void> waiting = service.awaitLive().test();
+          service.text("{\"channel\":\"errors\",\"code\":\"" + code
+              + "\",\"error\":\"history_busy\",\"message\":\"request rejected\"}");
+          waitFor(service::isTerminal);
+          Throwable original = service.getLastFailure();
+          assertTrue(original instanceof java.io.IOException);
+          assertTrue(original.getMessage().contains(code));
+          assertTrue(original.getMessage().contains("request rejected"));
+          waiting.awaitDone(3, TimeUnit.SECONDS).assertError(error -> error == original);
+          assertEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
+        } finally { service.stop(); }
+      }
+    }
+  }
+
+  @Test(timeout = 10000) public void malformedPresentCodeIsNeverAnInformationalLog() throws Exception {
+    for (String code : Arrays.asList("null", "true", "17", "{}", "[]", "\"\"")) {
+      Harness service = combinedService(new AtomicInteger());
+      try {
+        startCombined(service);
+        service.text("{\"channel\":\"errors\",\"code\":" + code + ",\"error\":\"server log\"}");
+        waitFor(service::isTerminal);
+        assertEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
+      } finally { service.stop(); }
+    }
+  }
+
   @Test(timeout = 10000) public void tradeRetentionWarnsInclusiveRangeAndResubscribesAtOldestPlusOneHundred() throws Exception {
     for (String error : Arrays.asList(
         "{\"channel\":\"error\",\"data\":\"history_unavailable\",\"oldest_height\":250}",
@@ -1435,6 +1591,57 @@ public class P2pStreamingServiceTest {
         service.connect().test().assertError(IllegalStateException.class);
       } finally { service.stop(); }
     }
+  }
+
+  @Test(timeout = 10000) public void liveTradeGapNeedsNoSecondLiveStatus() throws Exception {
+    assertTradeGapPreservesPriorLiveness(true);
+  }
+
+  @Test(timeout = 10000) public void replayTradeGapStillRequiresNormalLiveCompletion() throws Exception {
+    assertTradeGapPreservesPriorLiveness(false);
+  }
+
+  private static void assertTradeGapPreservesPriorLiveness(boolean initiallyLive) throws Exception {
+    AtomicInteger fetches = new AtomicInteger();
+    Harness service = combinedService(fetches);
+    try {
+      TestObserver<P2pStreamingService.TradePublication> trades = service.trades("ETH").test();
+      TestObserver<P2pOrderBook.View> books = service.book("BTC").test();
+      startCombined(service);
+      service.frame(SyntheticWire.status(0, 1, 100, 0));
+      awaitWorker(service);
+      service.frame(tradeBatch(1, 101, tradeEvent("ETH", true)));
+      if (initiallyLive) service.frame(SyntheticWire.status(3, 1, 101, 0));
+      awaitWorker(service);
+      P2pStreamingService.Readiness before = service.getReadiness();
+      assertEquals(initiallyLive ? P2pStreamingService.Readiness.LIVE
+          : P2pStreamingService.Readiness.CATCHING_UP, before);
+      long generation = service.getGeneration();
+      TestObserver<Void> live = service.awaitLive().test();
+      service.frame(SyntheticWire.status(3, 2, 102, 105));
+      awaitWorker(service);
+      assertEquals("Gap must preserve prior channel liveness", before, service.getReadiness());
+      assertCursor(service.getTradeCursor(), 106, 0);
+      assertEquals("P2P trades missing heights [102,105] (provider gap)", service.getLastTradeContinuityWarning());
+      service.frame(tradeBatch(2, 106, tradeEvent("ETH", false)));
+      awaitWorker(service);
+      assertEquals(before, service.getReadiness());
+      assertTradeIds(trades, "p2p:trades:101:1:0", "p2p:trades:106:1:0");
+      assertCursor(service.getTradeCursor(), 106, 1);
+      assertCursor(service.getCursor(), 101, 0);
+      assertHistoryOwner(service, initiallyLive ? null : "TRADES");
+      if (!initiallyLive) {
+        live.assertNotComplete().assertNoErrors();
+        service.frame(SyntheticWire.status(3, 1, 106, 0));
+      }
+      live.awaitDone(3, TimeUnit.SECONDS).assertComplete().assertNoErrors();
+      assertEquals(P2pStreamingService.Readiness.LIVE, service.getReadiness());
+      assertEquals(generation, service.getGeneration());
+      assertEquals(1, fetches.get());
+      assertEquals(4, service.sent.size());
+      books.assertValueCount(1);
+      assertTrue(service.channel.isOpen());
+    } finally { service.stop(); }
   }
 
   @Test(timeout = 10000) public void tradeGapReportsInclusiveMissingRangeAndContinuesWithoutBookSnapshotOrRetimestamp() throws Exception {
