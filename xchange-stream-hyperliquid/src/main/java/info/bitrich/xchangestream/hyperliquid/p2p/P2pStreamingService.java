@@ -350,15 +350,13 @@ public class P2pStreamingService extends NettyStreamingService<String> {
             maybeLive(lastLiveStamp);
           }
           } catch (Throwable error) {
-            if (token == generation.get()) {
-              if (prepared != null) prepared.onError(error);
-              fail(error);
-            }
+            if (token == generation.get()) fail(error);
           }
         }, System.nanoTime());
       } catch (Throwable error) {
         if (token != generation.get() || stopped.get()) return;
-        if (prepared != null) prepared.onError(error);
+        // Commit the terminal cause on the state worker before notifying preparation waiters.
+        // Their exchange-level error cleanup can synchronously disconnect this generation.
         enqueue(token, 0, () -> fail(error), System.nanoTime());
       }
     });
@@ -933,7 +931,11 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     if (waiting != null) waiting.onError(error);
     setAutoReconnect(false);
     if (channel != null) channel.close();
-    readinessEvents.onNext(Readiness.FAILED);
+    // Preparation error callbacks can synchronously stop this generation. Do not overwrite
+    // their DISCONNECTED notification with stale FAILED state for late readiness subscribers.
+    if (generation.get() == token + 1 && !stopped.get()) {
+      readinessEvents.onNext(Readiness.FAILED);
+    }
   }
 
   /** Immediate atomic invalidation; never wait for book work on a socket callback. */
