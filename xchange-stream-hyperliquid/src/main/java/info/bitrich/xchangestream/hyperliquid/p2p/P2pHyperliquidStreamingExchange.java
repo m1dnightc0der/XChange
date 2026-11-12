@@ -30,6 +30,9 @@ public class P2pHyperliquidStreamingExchange extends HyperliquidExchange impleme
   private Map<Instrument, String> instruments = Collections.emptyMap();
   private Map<Instrument, String> tradeInstruments = Collections.emptyMap();
   private Completable connection;
+  private boolean autoReconnect = true;
+  private boolean connectionPending;
+  private long connectionAttempt;
 
   @Override public void applySpecification(ExchangeSpecification specification) {
     if (service != null) throw new IllegalStateException("P2P specification is immutable after connect");
@@ -63,6 +66,18 @@ public class P2pHyperliquidStreamingExchange extends HyperliquidExchange impleme
           if (!instruments.equals(membership.instruments) || !tradeInstruments.equals(membership.trades)) {
             return Completable.error(new IllegalArgumentException("P2P membership is immutable"));
           }
+          if (!autoReconnect) {
+            if (service.getReadiness() == P2pStreamingService.Readiness.FAILED) {
+              return Completable.error(service.getLastFailure());
+            }
+            if (service.isTerminal()) {
+              return Completable.error(new IllegalStateException("Create a new exchange after explicit stop"));
+            }
+            if (connectionPending || service.getReadiness() == P2pStreamingService.Readiness.LIVE) {
+              return connection;
+            }
+            return startConnectionAttempt(service);
+          }
           if (service.getReadiness() == P2pStreamingService.Readiness.DISCONNECTED
               || service.getReadiness() == P2pStreamingService.Readiness.FAILED) {
             return Completable.error(new IllegalStateException("Create a new exchange after explicit stop"));
@@ -75,15 +90,41 @@ public class P2pHyperliquidStreamingExchange extends HyperliquidExchange impleme
             : new P2pSnapshotClient(requiredUri(P2P_SNAPSHOT_URI), redirectOrigins(), new P2pWireCodec());
         P2pStreamingService created = createP2pService(
             websocket, membership.coins, membership.tradeCoins, client);
+        autoReconnect = !Boolean.FALSE.equals(
+            exchangeSpecification.getExchangeSpecificParametersItem(StreamingExchange.AUTO_RECONNECT));
+        // Ownership must be established before publication or the first socket/snapshot attempt.
+        created.setAutoReconnect(autoReconnect);
         instruments = membership.instruments;
         tradeInstruments = membership.trades;
         // Publish both immutable maps before making the service visible to subscribers.
         service = created;
-        connection = created.connect().andThen(created.awaitLive())
+        if (!autoReconnect) return startConnectionAttempt(created);
+        connection = created.connect().andThen(Completable.defer(created::awaitLive))
             .doOnError(error -> disconnect().subscribe(() -> {}, ignored -> {})).cache();
         return connection;
       }
     });
+  }
+
+  /** Called under the exchange monitor; all callers of one pending hosted attempt join its cache. */
+  private Completable startConnectionAttempt(P2pStreamingService current) {
+    long attempt = ++connectionAttempt;
+    connectionPending = true;
+    connection = current.connect()
+        .doOnComplete(() -> {
+          synchronized (this) {
+            if (connectionAttempt == attempt) connectionPending = false;
+          }
+        })
+        .doOnError(error -> {
+          synchronized (this) {
+            if (connectionAttempt == attempt) {
+              connectionPending = false;
+              if (!current.isTerminal()) connection = null;
+            }
+          }
+        }).cache();
+    return connection;
   }
 
   @Override public Completable disconnect() {

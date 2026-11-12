@@ -82,6 +82,12 @@ public final class P2pSnapshotClient {
 
   public P2pWireCodec.Snapshot fetch(Set<String> coins, BigInteger minHeight)
       throws IOException, InterruptedException {
+    return fetch(coins, minHeight, true);
+  }
+
+  /** A hosted connection owns retries; retain admission/accounting but never wait or retry here. */
+  P2pWireCodec.Snapshot fetch(Set<String> coins, BigInteger minHeight, boolean autoRetry)
+      throws IOException, InterruptedException {
     P2pWireCodec.unsigned(minHeight);
     if (coins == null || coins.isEmpty() || coins.size() > 512) {
       throw new IllegalArgumentException("Snapshot membership must contain 1..512 coins");
@@ -105,6 +111,7 @@ public final class P2pSnapshotClient {
       try {
         reservation = reserveRequest();
       } catch (RetryLaterException deferred) {
+        if (!autoRetry) throw deferred;
         long delay = remainingDelay(deferred.getRetryAtMillis());
         LOG.info("P2P snapshot admission wait delay_ms={} reason={} retry_at_ms={}",
             delay, deferred.getMessage(), deferred.getRetryAtMillis());
@@ -125,6 +132,7 @@ public final class P2pSnapshotClient {
         settle(reservation, "unknown");
         LOG.info("P2P snapshot response attempt_id={} status={} code={} window={} accounting={}",
             reservation.id, "unknown", null, null, "unknown");
+        if (!autoRetry) throw error;
         retries = retryTransport(retries, error);
         current = initial;
         hops = 0;
@@ -138,6 +146,7 @@ public final class P2pSnapshotClient {
           reservation.id, response.status, metadata.code, metadata.window, accounting);
       if (response.failure != null) {
         // A known 200 remains counted even if body I/O fails; preserve the original failure.
+        if (!autoRetry) throw response.failure;
         retries = retryTransport(retries, response.failure);
         current = initial;
         hops = 0;
@@ -179,9 +188,9 @@ public final class P2pSnapshotClient {
         long retryAt = deferProvider(delay);
         LOG.info("P2P snapshot cooldown attempt_id={} status={} retry_at_ms={}",
             reservation.id, response.status, retryAt);
-        retries = retry(retries,
-            new RetryLaterException("Snapshot HTTP status " + response.status, retryAt),
-            remainingDelay(retryAt));
+        RetryLaterException failure = new RetryLaterException("Snapshot HTTP status " + response.status, retryAt);
+        if (!autoRetry) throw failure;
+        retries = retry(retries, failure, remainingDelay(retryAt));
         current = initial;
         hops = 0;
         reason = "retry";
@@ -230,7 +239,7 @@ public final class P2pSnapshotClient {
     }
     if (next > now) {
       throw new RetryLaterException(quota
-          ? "Local snapshot quota exhausted (shared-IP quota may be lower)" : "Provider retry delay", next);
+          ? "Local snapshot quota exhausted (shared-IP quota may be lower)" : "Provider retry delay", next, true);
     }
     Reservation reservation = new Reservation(now);
     requests.addLast(reservation);
@@ -384,11 +393,18 @@ public final class P2pSnapshotClient {
 
   public static final class RetryLaterException extends IOException {
     private final long retryAtMillis;
+    private final boolean admissionDeferred;
     RetryLaterException(String message, long retryAtMillis) {
+      this(message, retryAtMillis, false);
+    }
+    RetryLaterException(String message, long retryAtMillis, boolean admissionDeferred) {
       super(message);
       this.retryAtMillis = retryAtMillis;
+      this.admissionDeferred = admissionDeferred;
     }
     public long getRetryAtMillis() { return retryAtMillis; }
+    /** True only when admission refused before any HTTP transport invocation. */
+    public boolean isAdmissionDeferred() { return admissionDeferred; }
   }
 
   private static final class HttpTransport implements Transport {

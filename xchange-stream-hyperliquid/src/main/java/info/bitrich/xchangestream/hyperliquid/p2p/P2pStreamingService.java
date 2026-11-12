@@ -26,9 +26,13 @@ import io.reactivex.rxjava3.subjects.CompletableSubject;
 import io.reactivex.rxjava3.subjects.PublishSubject;
 import io.reactivex.rxjava3.subjects.Subject;
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
@@ -75,6 +79,8 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   private final Set<String> tradeCoins;
   private final P2pWireCodec codec;
   private final SnapshotSource snapshotSource;
+  private P2pSnapshotClient snapshotClient;
+  private volatile boolean autoReconnect = true;
   private final ObjectMapper mapper = new ObjectMapper();
   private final ThreadPoolExecutor work;
   private final ExecutorService http = Executors.newSingleThreadExecutor(daemon("p2p-snapshot"));
@@ -86,9 +92,13 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   private final AtomicLong queuedFrames = new AtomicLong();
   private final AtomicBoolean stopped = new AtomicBoolean();
   private final Subject<Readiness> readinessEvents = BehaviorSubject.<Readiness>createDefault(Readiness.DISCONNECTED).toSerialized();
-  private final Subject<Publication> publications = BehaviorSubject.<Publication>create().toSerialized();
+  // Hosted attempts replace only these publishers, retaining reconstructed books and cursors.
+  private Subject<Publication> publications = BehaviorSubject.<Publication>create().toSerialized();
   private final Subject<Observation> observations = PublishSubject.<Observation>create().toSerialized();
-  private final Subject<TradePublication> tradePublications = PublishSubject.<TradePublication>create().toSerialized();
+  private Subject<TradePublication> tradePublications = PublishSubject.<TradePublication>create().toSerialized();
+  private boolean renewPublications;
+  private CompletableSubject liveAttempt;
+  private CompletableSubject pendingLiveAttempt;
   private volatile Cursor tradeCursor;
   private volatile String lastTradeContinuityWarning;
   private volatile boolean bookLive;
@@ -139,6 +149,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
       P2pSnapshotClient snapshots) {
     this(websocket, bookCoins, tradeCoins, new P2pWireCodec(),
         snapshots == null ? null : snapshots::fetch, 256);
+    this.snapshotClient = snapshots;
   }
 
   P2pStreamingService(URI websocket, Set<String> coins, P2pWireCodec codec,
@@ -208,40 +219,87 @@ public class P2pStreamingService extends NettyStreamingService<String> {
 
   public Observable<P2pOrderBook.View> book(String coin) {
     if (!bookCoins.contains(coin)) return Observable.error(new IllegalArgumentException("Unsubscribed book coin"));
-    return publications.filter(p -> bookLive && p.generation == generation.get())
-        .map(p -> p.books.get(coin)).distinctUntilChanged();
+    return Observable.defer(() -> {
+      Subject<Publication> current;
+      synchronized (stateGate) { current = publications; }
+      return current.filter(p -> bookLive && p.generation == generation.get())
+          .map(p -> p.books.get(coin)).distinctUntilChanged();
+    });
   }
 
   public Observable<TradePublication> trades(String coin) {
     if (!tradeCoins.contains(coin)) return Observable.error(new IllegalArgumentException("Unsubscribed trade coin"));
-    // Generation is checked once at dispatch, not per observer: callbacks may revoke it.
-    return tradePublications.filter(p -> coin.equals(p.event.coin));
+    return Observable.defer(() -> {
+      Subject<TradePublication> current;
+      synchronized (stateGate) { current = tradePublications; }
+      // Generation is checked once at dispatch, not per observer: callbacks may revoke it.
+      return current.filter(p -> coin.equals(p.event.coin));
+    });
+  }
+
+  @Override public void setAutoReconnect(boolean autoReconnect) {
+    this.autoReconnect = autoReconnect;
+    super.setAutoReconnect(autoReconnect);
   }
 
   /** Completion gate for exchange callers; the inherited reconnect owner only waits for transport. */
   public Completable awaitLive() {
-    return readiness().filter(s -> s == Readiness.LIVE || s == Readiness.FAILED
-        || (s == Readiness.DISCONNECTED && stopped.get())).firstOrError()
-        .flatMapCompletable(s -> s == Readiness.LIVE ? Completable.complete()
-            : Completable.error(lastFailure == null ? new IOException("P2P disconnected") : lastFailure));
+    return Completable.defer(() -> {
+      synchronized (stateGate) {
+        if (!autoReconnect) {
+          if (isTerminal()) {
+            return Completable.error(lastFailure == null
+                ? new IOException("P2P disconnected") : lastFailure);
+          }
+          if (liveAttempt != null) return liveAttempt;
+        }
+      }
+      return readiness().filter(s -> s == Readiness.LIVE || s == Readiness.FAILED
+          || (s == Readiness.DISCONNECTED && stopped.get())).firstOrError()
+          .flatMapCompletable(s -> s == Readiness.LIVE ? Completable.complete()
+              : Completable.error(lastFailure == null ? new IOException("P2P disconnected") : lastFailure));
+    });
   }
 
   @Override public Completable connect() {
     return Completable.defer(() -> {
-      if (stopped.get() || readiness == Readiness.FAILED) {
-        return Completable.error(new IllegalStateException("P2P service is stopped"));
-      }
       CompletableSubject prepared = CompletableSubject.create();
-      preparation = prepared;
-      long token = generation.get();
+      CompletableSubject attempt;
+      long token;
+      synchronized (stateGate) {
+        if (isTerminal()) {
+          return Completable.error(!autoReconnect && lastFailure != null
+              ? lastFailure : new IllegalStateException("P2P service is stopped"));
+        }
+        if (!autoReconnect) {
+          if (pendingLiveAttempt != null) return pendingLiveAttempt;
+          if (readiness == Readiness.LIVE && liveAttempt != null) return liveAttempt;
+          if (renewPublications) {
+            publications = BehaviorSubject.<Publication>create().toSerialized();
+            tradePublications = PublishSubject.<TradePublication>create().toSerialized();
+            renewPublications = false;
+          }
+          liveAttempt = CompletableSubject.create();
+          pendingLiveAttempt = liveAttempt;
+        }
+        attempt = autoReconnect ? null : liveAttempt;
+        preparation = prepared;
+        token = generation.get();
+      }
       boolean accepted = enqueue(token, 0, () -> {
         try { prepare(prepared); }
-        catch (Throwable error) { prepared.onError(error); fail(error); }
+        catch (Throwable error) { fail(error); }
       }, System.nanoTime());
-      if (!accepted) prepared.onError(new IOException("P2P connection preparation rejected"));
-      return prepared.andThen(Completable.defer(() -> {
-        if (isTerminal()) return Completable.error(new IOException("P2P connection cancelled"));
-        long current = generation.get();
+      if (!accepted) prepared.onError(lastFailure == null
+          ? new IOException("P2P connection preparation rejected") : lastFailure);
+      Completable transport = prepared.andThen(Completable.defer(() -> {
+        long current;
+        synchronized (stateGate) {
+          if (attempt != null && pendingLiveAttempt != attempt) return attempt;
+          if (isTerminal()) return Completable.error(!autoReconnect && lastFailure != null
+              ? lastFailure : new IOException("P2P connection cancelled"));
+          current = generation.get();
+        }
         return super.connect().doOnComplete(() -> {
           synchronized (stateGate) {
             if (current != generation.get() || isTerminal()) return;
@@ -251,16 +309,26 @@ public class P2pStreamingService extends NettyStreamingService<String> {
             if (handler != null && handler.token == current) handler.lastIngressNanos = negotiationSinceNanos;
           }
           sendControl("{\"method\":\"info\"}", current);
+        }).doOnError(error -> {
+          if (!autoReconnect) invalidate(current, error, false);
         });
       }));
+      // Bind LIVE completion and failure to this attempt, not a later callback's attempt.
+      // Invalidation records the original failure before closing the channel, but the inherited
+      // close listener can report ClosedChannelException before the attempt is notified.
+      return attempt == null ? transport : transport
+          .onErrorResumeNext(error -> attempt.andThen(Completable.error(error)))
+          .andThen(attempt);
     });
   }
 
   private void prepare(CompletableSubject prepared) {
     long token;
-    synchronized (stateGate) { token = generation.incrementAndGet(); }
-    workerToken = token;
-    preparation = prepared;
+    synchronized (stateGate) {
+      if (workerToken != generation.get() || stopped.get() || preparation != prepared) return;
+      token = generation.incrementAndGet();
+      workerToken = token;
+    }
     negotiated = false;
     subscribed = false;
     bookLive = false;
@@ -282,8 +350,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     negotiationSinceNanos = 0;
     if (bookCoins.isEmpty()) {
       setReadiness(Readiness.CATCHING_UP);
-      preparation = null;
-      prepared.onComplete();
+      completePreparation(token, prepared);
       return;
     }
     if (recovery == Recovery.LIVE_FIRST) {
@@ -298,68 +365,89 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     } else {
       replayRemaining = recovery == Recovery.WARM && cursor != null ? cursor.framesAtHeight : 0;
       setReadiness(seeded ? Readiness.CATCHING_UP : Readiness.SEEDING);
-      preparation = null;
-      prepared.onComplete();
+      completePreparation(token, prepared);
     }
   }
 
+  private void completePreparation(long token, CompletableSubject prepared) {
+    synchronized (stateGate) {
+      if (token != generation.get() || stopped.get() || preparation != prepared) return;
+      preparation = null;
+    }
+    prepared.onComplete();
+  }
+
   private void requestSnapshot(long token, BigInteger minHeight, CompletableSubject prepared) {
-    snapshotPending = true;
-    snapshotTask = http.submit(() -> {
-      try {
-        P2pWireCodec.Snapshot snapshot = snapshotSource.fetch(bookCoins, minHeight);
-        enqueue(token, 0, () -> {
-          try {
-          if (!snapshot.books.keySet().equals(bookCoins) || snapshot.height.compareTo(minHeight) < 0) {
-            throw new IllegalArgumentException("Snapshot membership/height mismatch");
-          }
-          Map<String, P2pOrderBook> replacement = new LinkedHashMap<>();
-          snapshot.books.forEach((coin, orders) -> {
-            P2pOrderBook book = new P2pOrderBook(coin);
-            book.seed(orders);
-            replacement.put(coin, book);
-          });
-          if (snapshot.height.equals(P2pWireCodec.MAX_U64)) throw new IllegalArgumentException("Height exhausted");
-          int replacementOrders = replacement.values().stream().mapToInt(P2pOrderBook::getOrderCount).sum();
-          synchronized (stateGate) {
-            if (token != generation.get() || stopped.get()) return;
-            booksByCoin = replacement;
-            totalOrders = replacementOrders;
-            lastViews.clear();
-            bookProvenance.clear(); // Snapshot metadata has no exchange block time.
-            cursor = new Cursor(snapshot.height.add(BigInteger.ONE), 0);
-            if (!tradeCoins.isEmpty() && tradeCursor == null) tradeCursor = new Cursor(cursor.height, 0);
-            seeded = true;
-            snapshotPending = false;
-            replayRemaining = 0;
-          }
-          if (prepared != null) {
-            setRecovery(Recovery.WARM);
-            setReadiness(Readiness.CATCHING_UP);
-            preparation = null;
-            prepared.onComplete();
-          } else {
-            // HTTP can overtake WebSocket ingress; later frames at/below H are covered too.
-            snapshotCoveredHeight = snapshot.height;
-            for (Decoded buffered : pending) {
-              if (buffered.diff.height.compareTo(snapshotCoveredHeight) > 0) apply(buffered);
-            }
-            pending.clear();
-            pendingBytes = 0;
-            setRecovery(Recovery.WARM);
-            maybeLive(lastLiveStamp);
-          }
-          } catch (Throwable error) {
-            if (token == generation.get()) fail(error);
-          }
-        }, System.nanoTime());
-      } catch (Throwable error) {
+    synchronized (stateGate) {
+      if (token != generation.get() || stopped.get()) return;
+      snapshotPending = true;
+      snapshotTask = http.submit(() -> {
         if (token != generation.get() || stopped.get()) return;
-        // Commit the terminal cause on the state worker before notifying preparation waiters.
-        // Their exchange-level error cleanup can synchronously disconnect this generation.
-        enqueue(token, 0, () -> fail(error), System.nanoTime());
-      }
-    });
+        try {
+          P2pWireCodec.Snapshot snapshot = snapshotClient == null
+              ? snapshotSource.fetch(bookCoins, minHeight)
+              : snapshotClient.fetch(bookCoins, minHeight, autoReconnect);
+          enqueue(token, 0, () -> {
+            try {
+              if (!snapshot.books.keySet().equals(bookCoins) || snapshot.height.compareTo(minHeight) < 0) {
+                throw new IllegalArgumentException("Snapshot membership/height mismatch");
+              }
+              Map<String, P2pOrderBook> replacement = new LinkedHashMap<>();
+              snapshot.books.forEach((coin, orders) -> {
+                P2pOrderBook book = new P2pOrderBook(coin);
+                book.seed(orders);
+                replacement.put(coin, book);
+              });
+              if (snapshot.height.equals(P2pWireCodec.MAX_U64)) throw new IllegalArgumentException("Height exhausted");
+              int replacementOrders = replacement.values().stream().mapToInt(P2pOrderBook::getOrderCount).sum();
+              synchronized (stateGate) {
+                if (token != generation.get() || stopped.get()) return;
+                booksByCoin = replacement;
+                totalOrders = replacementOrders;
+                lastViews.clear();
+                bookProvenance.clear(); // Snapshot metadata has no exchange block time.
+                cursor = new Cursor(snapshot.height.add(BigInteger.ONE), 0);
+                if (!tradeCoins.isEmpty() && tradeCursor == null) tradeCursor = new Cursor(cursor.height, 0);
+                seeded = true;
+                snapshotPending = false;
+                replayRemaining = 0;
+              }
+              if (prepared != null) {
+                setRecovery(Recovery.WARM);
+                setReadiness(Readiness.CATCHING_UP);
+                completePreparation(token, prepared);
+              } else {
+                // HTTP can overtake WebSocket ingress; later frames at/below H are covered too.
+                snapshotCoveredHeight = snapshot.height;
+                for (Decoded buffered : pending) {
+                  if (buffered.diff.height.compareTo(snapshotCoveredHeight) > 0) apply(buffered);
+                }
+                pending.clear();
+                pendingBytes = 0;
+                setRecovery(Recovery.WARM);
+                maybeLive(lastLiveStamp);
+              }
+            } catch (Throwable error) {
+              if (token == generation.get()) fail(error);
+            }
+          }, System.nanoTime());
+        } catch (Throwable error) {
+          if (token != generation.get() || stopped.get()) return;
+          // Commit the original cause before notifying preparation or LIVE waiters.
+          enqueue(token, 0, () -> {
+            if (!autoReconnect && retryableSnapshotFailure(error)) invalidate(token, error, false);
+            else fail(error);
+          }, System.nanoTime());
+        }
+      });
+    }
+  }
+
+  private static boolean retryableSnapshotFailure(Throwable error) {
+    // Match the snapshot client's transport policy; validation/TLS/policy IOExceptions stay fatal.
+    return error instanceof P2pSnapshotClient.RetryLaterException
+        || error instanceof SocketException || error instanceof SocketTimeoutException
+        || error instanceof UnknownHostException || error instanceof EOFException;
   }
 
   @Override public void messageHandler(String message) {
@@ -719,9 +807,14 @@ public class P2pStreamingService extends NettyStreamingService<String> {
         if (token != generation.get() || stopped.get()) return;
         TradePublication publication = new TradePublication(
             "p2p:trades:" + batch.height + ":" + ordinal + ":" + i, batch.trades.get(i));
+        // Capture this attempt's publisher before callbacks can create a successor.
+        Subject<TradePublication> target;
+        synchronized (stateGate) {
+          if (token != generation.get() || stopped.get()) return;
+          target = tradePublications;
+        }
         // All current observers get this event even if the first one revokes the generation.
-        if (token != generation.get() || stopped.get()) return;
-        tradePublications.onNext(publication);
+        target.onNext(publication);
         partial.emittedPrefix = i + 1;
       }
       synchronized (stateGate) {
@@ -825,8 +918,12 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     }
     Map<String, P2pOrderBook.View> views = new LinkedHashMap<>(lastViews);
     long readyNanos = System.nanoTime();
-    if (token != generation.get() || !bookLive) return;
-    publications.onNext(new Publication(token, Collections.unmodifiableMap(views)));
+    Subject<Publication> target;
+    synchronized (stateGate) {
+      if (token != generation.get() || !bookLive) return;
+      target = publications;
+    }
+    target.onNext(new Publication(token, Collections.unmodifiableMap(views)));
     if (decoded != null) {
       for (String coin : changed) observations.onNext(new Observation(coin, token, decoded.diff,
           decoded.micros, decoded.nanos, decoded.decodeStartedNanos, decoded.decodedNanos,
@@ -841,10 +938,16 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   }
 
   private void setReadiness(Readiness value) {
+    CompletableSubject completed = null;
     synchronized (stateGate) {
       if (workerToken != generation.get() || stopped.get()) return;
       readiness = value;
+      if (value == Readiness.LIVE) {
+        completed = pendingLiveAttempt;
+        pendingLiveAttempt = null;
+      }
     }
+    if (completed != null) completed.onComplete();
     readinessEvents.onNext(value);
   }
 
@@ -909,12 +1012,30 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     return error instanceof IllegalArgumentException ? "invalid_data" : fallback;
   }
 
+  /** Capture only the failed attempt under stateGate; invoke the returned callbacks outside it. */
+  private Runnable failedAttempt(Throwable error) {
+    CompletableSubject waiting = preparation;
+    preparation = null;
+    CompletableSubject pendingLive = pendingLiveAttempt;
+    pendingLiveAttempt = null;
+    boolean terminatePublishers = !autoReconnect && !renewPublications;
+    Subject<Publication> failedBooks = terminatePublishers ? publications : null;
+    Subject<TradePublication> failedTrades = terminatePublishers ? tradePublications : null;
+    if (terminatePublishers) renewPublications = true;
+    return () -> {
+      if (waiting != null) waiting.onError(error);
+      if (pendingLive != null) pendingLive.onError(error);
+      if (failedBooks != null) failedBooks.onError(error);
+      if (failedTrades != null) failedTrades.onError(error);
+    };
+  }
+
   private void fail(Throwable error) {
     Channel channel;
     BinaryHandler handler;
     Readiness atFailure;
     long token;
-    CompletableSubject waiting;
+    Runnable notifyFailure;
     synchronized (stateGate) {
       if (workerToken != generation.get() || stopped.get()) return;
       token = workerToken;
@@ -924,13 +1045,12 @@ public class P2pStreamingService extends NettyStreamingService<String> {
       generation.incrementAndGet();
       readiness = Readiness.FAILED;
       channel = activeChannel;
-      waiting = preparation;
-      preparation = null;
+      notifyFailure = failedAttempt(error);
     }
     recordFailure(token, atFailure, channel, handler, error, "terminal_failure");
-    if (waiting != null) waiting.onError(error);
-    setAutoReconnect(false);
+    super.setAutoReconnect(false);
     if (channel != null) channel.close();
+    notifyFailure.run();
     // Preparation error callbacks can synchronously stop this generation. Do not overwrite
     // their DISCONNECTED notification with stale FAILED state for late readiness subscribers.
     if (generation.get() == token + 1 && !stopped.get()) {
@@ -940,10 +1060,14 @@ public class P2pStreamingService extends NettyStreamingService<String> {
 
   /** Immediate atomic invalidation; never wait for book work on a socket callback. */
   private void invalidate(long token, Throwable error, boolean cold) {
+    invalidate(token, error, cold, true);
+  }
+
+  private void invalidate(long token, Throwable error, boolean cold, boolean notifyReadiness) {
     Channel channel;
     BinaryHandler handler;
     Readiness atFailure;
-    CompletableSubject waiting;
+    Runnable notifyFailure;
     Future<?> task;
     synchronized (stateGate) {
       if (stopped.get() || readiness == Readiness.FAILED || !generation.compareAndSet(token, token + 1)) return;
@@ -953,16 +1077,18 @@ public class P2pStreamingService extends NettyStreamingService<String> {
       if (cold) recovery = Recovery.COLD;
       readiness = Readiness.CATCHING_UP;
       channel = activeChannel;
-      waiting = preparation;
-      preparation = null;
+      notifyFailure = failedAttempt(error);
       task = snapshotTask;
     }
-    recordFailure(token, atFailure, channel, handler, error, cold ? "cold_recovery" : "warm_recovery");
-    if (waiting != null) waiting.onError(error);
+    recordFailure(token, atFailure, channel, handler, error,
+        !notifyReadiness ? "worker_rejection" : cold ? "cold_recovery" : "warm_recovery");
     if (task != null && !task.isDone()) task.cancel(true);
     if (channel != null) channel.close();
+    notifyFailure.run();
     // Notifications are queued; the immediately readable readiness/generation are already invalid.
-    enqueue(token + 1, 0, () -> readinessEvents.onNext(readiness), System.nanoTime());
+    if (notifyReadiness) {
+      enqueue(token + 1, 0, () -> readinessEvents.onNext(readiness), System.nanoTime());
+    }
   }
 
   private boolean enqueue(long token, long bytes, Work action, long ingressNanos) {
@@ -988,27 +1114,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
     catch (RejectedExecutionException e) {
       task.discard();
       // Do not recursively enqueue an invalidation event into a full queue.
-      CompletableSubject waiting = null;
-      Channel channel = null;
-      BinaryHandler handler = null;
-      Readiness atFailure = null;
-      Throwable failure = new IOException("P2P ingress queue overflow", e);
-      synchronized (stateGate) {
-        if (!isTerminal() && generation.compareAndSet(token, token + 1)) {
-          atFailure = readiness;
-          handler = activeHandler;
-          readiness = Readiness.CATCHING_UP;
-          lastFailure = failure;
-          waiting = preparation;
-          preparation = null;
-          channel = activeChannel;
-        }
-      }
-      // Only the winning transition records a diagnostic; stale rejection is silent.
-      if (atFailure != null) recordFailure(token, atFailure, channel, handler, failure, "worker_rejection");
-      // Observer and transport callbacks must never run under stateGate.
-      if (waiting != null) waiting.onError(failure);
-      if (channel != null) channel.close();
+      invalidate(token, new IOException("P2P ingress queue overflow", e), false, false);
       return false;
     }
   }
@@ -1089,17 +1195,17 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   }
 
   @Override public Completable disconnect() {
+    Runnable notifyFailure;
     synchronized (stateGate) {
       stopped.set(true);
       generation.incrementAndGet();
       readiness = Readiness.DISCONNECTED;
+      notifyFailure = failedAttempt(new IOException("P2P disconnected"));
     }
-    CompletableSubject waiting = preparation;
-    preparation = null;
-    if (waiting != null) waiting.onError(new IOException("P2P disconnected"));
     Future<?> task = snapshotTask;
     if (task != null) task.cancel(true);
-    setAutoReconnect(false);
+    super.setAutoReconnect(false);
+    notifyFailure.run();
     watchdog.shutdownNow();
     http.shutdownNow();
     for (Runnable queued : work.shutdownNow()) {

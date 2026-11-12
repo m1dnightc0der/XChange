@@ -29,6 +29,118 @@ public class P2pSnapshotClientTest {
   private static final String REQUEST_LOG = "P2P snapshot request attempt_id={} reason={} coin_count={} min_height={} origin={} path={}";
   private static final String RESPONSE_LOG = "P2P snapshot response attempt_id={} status={} code={} window={} accounting={}";
 
+  @Test public void hostedTransportFailureIsOriginalAndNeverRunsAnInternalRetry() throws Exception {
+    AtomicLong clock = new AtomicLong(1_000_000L);
+    AtomicInteger calls = new AtomicInteger();
+    List<Long> sleeps = new ArrayList<>();
+    SocketException original = new SocketException("controlled snapshot transport failure");
+    P2pSnapshotClient client = client((uri, limit) -> {
+      calls.incrementAndGet();
+      throw original;
+    }, clock, sleeps);
+    for (int attempt = 1; attempt <= 4; attempt++) {
+      IOException actual = assertThrows(IOException.class, () -> fetchHosted(client));
+      assertEquals("One host admission must make one HTTP attempt", attempt, calls.get());
+      assertSame(original, actual);
+      assertTrue("Hosted attempts must never sleep inside the provider", sleeps.isEmpty());
+    }
+    IOException deferred = assertThrows(IOException.class, () -> fetchHosted(client));
+    assertTrue(deferred instanceof P2pSnapshotClient.RetryLaterException);
+    assertTrue(admissionDeferred((P2pSnapshotClient.RetryLaterException) deferred));
+    assertEquals(4, calls.get()); // Unknown outcomes still consume both conservative windows.
+    assertEquals(4_600_000L, ((P2pSnapshotClient.RetryLaterException) deferred).getRetryAtMillis());
+    assertTrue(sleeps.isEmpty());
+  }
+
+  @Test public void hostedKnown200ReadFailureRetainsOriginalCauseAndCountedReservation() throws Exception {
+    AtomicLong clock = new AtomicLong(1_000_000L);
+    AtomicInteger calls = new AtomicInteger();
+    List<Long> sleeps = new ArrayList<>();
+    SocketException original = new SocketException("controlled counted body failure");
+    java.lang.reflect.Constructor<P2pSnapshotClient.Response> constructor =
+        P2pSnapshotClient.Response.class.getDeclaredConstructor(
+            int.class, Map.class, byte[].class, IOException.class);
+    constructor.setAccessible(true);
+    P2pSnapshotClient.Response broken = constructor.newInstance(200,
+        Collections.singletonMap("X-Snapshot-Height", "100"), new byte[0], original);
+    P2pSnapshotClient client = client((uri, limit) -> { calls.incrementAndGet(); return broken; }, clock, sleeps);
+    for (int attempt = 1; attempt <= 4; attempt++) {
+      IOException actual = assertThrows(IOException.class, () -> fetchHosted(client));
+      assertEquals("Known 200 body failure is still exactly one attempt", attempt, calls.get());
+      assertSame(original, actual);
+    }
+    P2pSnapshotClient.RetryLaterException deferred = assertThrows(
+        P2pSnapshotClient.RetryLaterException.class, () -> fetchHosted(client));
+    assertTrue(admissionDeferred(deferred));
+    assertEquals(4, calls.get());
+    assertEquals(4_600_000L, deferred.getRetryAtMillis());
+    assertTrue(sleeps.isEmpty());
+  }
+
+  @Test public void hosted429RetainsFullDeadlineAndSubsequentAdmissionDoesNotSend() throws Exception {
+    long start = 1_000_000L;
+    long deadline = start + 8_672_000L;
+    AtomicLong clock = new AtomicLong(start);
+    AtomicInteger calls = new AtomicInteger();
+    List<Long> sleeps = new ArrayList<>();
+    P2pSnapshotClient client = client((uri, limit) -> calls.incrementAndGet() == 1
+        ? response(429, "Retry-After", "8672", new byte[0]) : success(), clock, sleeps);
+    P2pSnapshotClient.RetryLaterException responseFailure = assertThrows(
+        P2pSnapshotClient.RetryLaterException.class, () -> fetchHosted(client));
+    assertEquals(1, calls.get());
+    assertEquals(deadline, responseFailure.getRetryAtMillis());
+    assertFalse("The actual 429 consumes one failed attempt", admissionDeferred(responseFailure));
+    for (long now : new long[] {start, deadline - 1}) {
+      clock.set(now);
+      P2pSnapshotClient.RetryLaterException admission = assertThrows(
+          P2pSnapshotClient.RetryLaterException.class, () -> fetchHosted(client));
+      assertTrue("Waiting for admission is not a failed transport", admissionDeferred(admission));
+      assertEquals(deadline, admission.getRetryAtMillis());
+      assertEquals(1, calls.get());
+      assertTrue(sleeps.isEmpty());
+    }
+    clock.set(deadline);
+    assertEquals(BigInteger.valueOf(100), fetchHosted(client).height);
+    assertEquals(2, calls.get());
+    assertTrue(sleeps.isEmpty());
+  }
+
+  @Test public void hostedLocalAdmissionReturnsWithoutSleepingOrIssuingARequest() throws Exception {
+    AtomicLong clock = new AtomicLong(1_000_000L);
+    AtomicInteger calls = new AtomicInteger();
+    List<Long> sleeps = new ArrayList<>();
+    P2pSnapshotClient client = client((uri, limit) -> { calls.incrementAndGet(); return success(); }, clock, sleeps);
+    for (int i = 0; i < 4; i++) fetchHosted(client);
+    P2pSnapshotClient.RetryLaterException deferred = assertThrows(
+        P2pSnapshotClient.RetryLaterException.class, () -> fetchHosted(client));
+    assertTrue(admissionDeferred(deferred));
+    assertEquals(4_600_000L, deferred.getRetryAtMillis());
+    assertEquals(4, calls.get());
+    assertEquals(1_000_000L, clock.get());
+    assertTrue(sleeps.isEmpty());
+  }
+
+  @Test public void hostedBusyResponsesKeepEndpointMinimumWithoutNestedRetries() throws Exception {
+    for (int status : new int[] {409, 502, 503}) {
+      AtomicLong clock = new AtomicLong(1_000_000L);
+      AtomicInteger calls = new AtomicInteger();
+      List<Long> sleeps = new ArrayList<>();
+      P2pSnapshotClient client = client((uri, limit) -> {
+        calls.incrementAndGet();
+        return response(status, "Retry-After", "17", new byte[0]);
+      }, clock, sleeps);
+      IOException actual = assertThrows(IOException.class, () -> fetchHosted(client));
+      assertEquals("One failed busy response per host attempt", 1, calls.get());
+      assertTrue(actual instanceof P2pSnapshotClient.RetryLaterException);
+      P2pSnapshotClient.RetryLaterException deferred = (P2pSnapshotClient.RetryLaterException) actual;
+      assertFalse(admissionDeferred(deferred));
+      assertEquals(1_000_000L + (status == 503 ? 17_000L : 10_000L), deferred.getRetryAtMillis());
+      assertTrue(sleeps.isEmpty());
+    }
+    assertFalse("Existing two-argument exceptions retain response-failure semantics",
+        admissionDeferred(new P2pSnapshotClient.RetryLaterException("existing caller", 123L)));
+  }
+
   @Test public void exactEncodedFiltersAndCommonHeightAreRequired() throws Exception {
     List<URI> requests = new ArrayList<>();
     Map<String, List<P2pWireCodec.Change>> books = new HashMap<>();
@@ -799,6 +911,34 @@ public class P2pSnapshotClientTest {
     assertEquals(17, calls.get());
     assertEquals("the oldest counted reservation, not the free response, anchors daily expiry",
         start + 86_400_000L, clock.get());
+  }
+
+  /** Compile against the pre-change API and fail on behavior, not a missing overload. */
+  private static P2pWireCodec.Snapshot fetchHosted(P2pSnapshotClient client) throws Exception {
+    java.lang.reflect.Method fetch;
+    try {
+      fetch = P2pSnapshotClient.class.getDeclaredMethod("fetch", java.util.Set.class,
+          BigInteger.class, boolean.class);
+    } catch (NoSuchMethodException beforeImplementation) {
+      return client.fetch(Collections.singleton("BTC"), BigInteger.ZERO);
+    }
+    fetch.setAccessible(true);
+    try {
+      return (P2pWireCodec.Snapshot) fetch.invoke(client, Collections.singleton("BTC"), BigInteger.ZERO, false);
+    } catch (java.lang.reflect.InvocationTargetException failure) {
+      Throwable cause = failure.getCause();
+      if (cause instanceof Exception) throw (Exception) cause;
+      if (cause instanceof Error) throw (Error) cause;
+      throw new AssertionError(cause);
+    }
+  }
+
+  private static boolean admissionDeferred(P2pSnapshotClient.RetryLaterException failure) throws Exception {
+    try {
+      return (Boolean) failure.getClass().getMethod("isAdmissionDeferred").invoke(failure);
+    } catch (NoSuchMethodException beforeImplementation) {
+      return false;
+    }
   }
 
   private static List<ILoggingEvent> events(ListAppender<ILoggingEvent> appender, String template) {
