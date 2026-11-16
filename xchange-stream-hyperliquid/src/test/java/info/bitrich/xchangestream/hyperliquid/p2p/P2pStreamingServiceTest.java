@@ -1525,6 +1525,9 @@ public class P2pStreamingServiceTest {
   }
 
   @Test(timeout = 10000) public void tradeRetentionWarnsInclusiveRangeAndResubscribesAtOldestPlusOneHundred() throws Exception {
+    java.lang.reflect.Method reason = P2pStreamingService.class.getDeclaredMethod(
+        "failureReason", Throwable.class, String.class);
+    reason.setAccessible(true);
     for (String error : Arrays.asList(
         "{\"channel\":\"error\",\"data\":\"history_unavailable\",\"oldest_height\":250}",
         "{\"channel\":\"error\",\"data\":{\"code\":\"history_unavailable\",\"oldest_height\":\"250\"}}")) {
@@ -1538,6 +1541,9 @@ public class P2pStreamingServiceTest {
         waitFor(() -> !service.channel.isOpen());
         assertCursor(service.getTradeCursor(), 350, 0);
         assertEquals("P2P trades missing heights [200,349] (retention)", service.getLastTradeContinuityWarning());
+        assertTrue(service.getLastFailure() instanceof P2pTradeRetentionRecoveryException);
+        assertEquals("P2P trade retention cursor advanced", service.getLastFailure().getMessage());
+        assertEquals("trade_retention", reason.invoke(null, service.getLastFailure(), "warm_resume"));
         assertNotEquals(P2pStreamingService.Readiness.FAILED, service.getReadiness());
         restartTrades(service, 350);
         service.frame(tradeBatch(1, 350, tradeEvent("BTC", false)));
@@ -1562,6 +1568,7 @@ public class P2pStreamingServiceTest {
         waitFor(() -> service.getReadiness() == P2pStreamingService.Readiness.FAILED);
         assertCursor(service.getTradeCursor(), 200, 0);
         assertTrue(service.getLastFailure().getMessage().contains("Trade continuity failure"));
+        assertFalse(service.getLastFailure() instanceof P2pTradeRetentionRecoveryException);
         assertNull(service.getLastTradeContinuityWarning());
         assertEquals(3, service.sent.size());
         trades.assertNoValues();

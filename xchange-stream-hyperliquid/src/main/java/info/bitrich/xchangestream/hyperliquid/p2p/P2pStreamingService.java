@@ -534,7 +534,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
             tradeLive = false;
           }
           warnTradeGap(from, boundary.subtract(BigInteger.ONE), "retention");
-          invalidate(token, new IOException("Trade history unavailable"), false);
+          invalidate(token, new P2pTradeRetentionRecoveryException(), false);
         }
       } else {
         fail(new IOException(detail));
@@ -991,6 +991,7 @@ public class P2pStreamingService extends NettyStreamingService<String> {
   }
 
   private static String failureReason(Throwable error, String fallback) {
+    if (error instanceof P2pTradeRetentionRecoveryException) return "trade_retention";
     // Inspect only the known JDK exception type. Never print a parser/observer/provider message.
     if (error != null && error.getClass() == IOException.class) {
       String message = error.getMessage();
